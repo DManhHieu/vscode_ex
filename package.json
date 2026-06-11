@@ -1,0 +1,50 @@
+{
+  "name": "excute-sql",
+  "displayName": "Execute SQL Files",
+  "description": "Execute multiple .sql script files in filename order using SQLTools connections",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionDependencies": [
+    "mtxr.sqltools"
+  ],
+  "activationEvents": [
+    "onCommand:excuteSql.runMultiple"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "excuteSql.runMultiple",
+        "title": "Execute SQL Files",
+        "category": "Execute SQL"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "excuteSql.runMultiple",
+          "when": "resourceExtname == .sql",
+          "group": "navigation@50"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "typescript": "^5.4.0"
+  }
+}

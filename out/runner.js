@@ -39,7 +39,9 @@ exports.log = log;
 exports.showOutput = showOutput;
 exports.isSqlFile = isSqlFile;
 exports.sortSqlFilesByName = sortSqlFilesByName;
+exports.executeSqlQuery = executeSqlQuery;
 exports.runSqlFilesInOrder = runSqlFilesInOrder;
+exports.runQueryString = runQueryString;
 exports.pickSqlFilesFromDialog = pickSqlFilesFromDialog;
 exports.resolveSelectedUris = resolveSelectedUris;
 const path = __importStar(require("path"));
@@ -163,6 +165,44 @@ async function runSqlFilesInOrder(uris, connNameOrId) {
         }
         log(`Batch execution finished successfully (${sqlFiles.length} file(s)).`);
         vscode.window.showInformationMessage(`Successfully executed ${sqlFiles.length} SQL file(s) in order.`);
+    });
+}
+async function runQueryString(query, connNameOrId, label) {
+    if (!isActive()) {
+        return;
+    }
+    const trimmed = query.trim();
+    if (!trimmed) {
+        vscode.window.showWarningMessage('Query is empty.');
+        return;
+    }
+    log(`Running query: ${label}`);
+    log(`Connection: ${connNameOrId}`);
+    log(`SQL:\n${trimmed}`);
+    showOutput();
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Execute SQL Query',
+        cancellable: false,
+    }, async () => {
+        try {
+            const result = await executeSqlQuery(trimmed, connNameOrId);
+            if (result === undefined) {
+                throw new Error('SQLTools execution failed. Check the SQLTools output channel for details.');
+            }
+            const failureMessage = isExecutionFailure(result);
+            if (failureMessage) {
+                throw new Error(failureMessage);
+            }
+            log(`Query completed successfully: ${label}`);
+            vscode.window.showInformationMessage(`Query executed successfully: ${label}`);
+        }
+        catch (error) {
+            const message = getErrorMessage(error);
+            log(`Query failed: ${label} — ${message}`);
+            showOutput();
+            vscode.window.showErrorMessage(`Query failed: ${message}`);
+        }
     });
 }
 async function pickSqlFilesFromDialog() {

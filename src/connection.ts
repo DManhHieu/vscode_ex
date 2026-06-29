@@ -36,6 +36,21 @@ export async function getSqlToolsConnections(): Promise<SqlToolsConnection[]> {
   return connections ?? [];
 }
 
+export async function resolveConnectionId(preferSpring = true): Promise<string | undefined> {
+  if (preferSpring) {
+    try {
+      const { resolveSpringConnection } = await import('./spring/springConnection');
+      const springConn = await resolveSpringConnection();
+      if (springConn) {
+        return springConn;
+      }
+    } catch {
+      // spring module not available or resolution failed
+    }
+  }
+  return pickSqlToolsConnection();
+}
+
 export async function pickSqlToolsConnection(): Promise<string | undefined> {
   const connections = await getSqlToolsConnections();
 

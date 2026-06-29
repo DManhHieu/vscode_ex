@@ -1,20 +1,27 @@
 {
   "name": "excute-sql",
-  "displayName": "Execute SQL Files",
-  "description": "Execute multiple .sql script files in filename order using SQLTools connections",
-  "version": "0.1.0",
+  "displayName": "Execute SQL & Spring JPA",
+  "description": "Execute SQL files and Spring JPA @Query annotations using SQLTools connections, with entity navigation, completion, and repository validation",
+  "version": "0.3.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Programming Languages"
   ],
   "extensionDependencies": [
     "mtxr.sqltools"
   ],
+  "extensionPack": [],
   "activationEvents": [
-    "onCommand:excuteSql.runMultiple"
+    "onCommand:excuteSql.runMultiple",
+    "onCommand:excuteSql.runSpringQuery",
+    "onCommand:excuteSql.copySpringQuery",
+    "onLanguage:java",
+    "workspaceContains:**/application.properties",
+    "workspaceContains:**/application.yml"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -22,6 +29,21 @@
       {
         "command": "excuteSql.runMultiple",
         "title": "Execute SQL Files",
+        "category": "Execute SQL"
+      },
+      {
+        "command": "excuteSql.runSpringQuery",
+        "title": "Run Spring @Query",
+        "category": "Execute SQL"
+      },
+      {
+        "command": "excuteSql.refreshSpringIndex",
+        "title": "Refresh Spring JPA Index",
+        "category": "Execute SQL"
+      },
+      {
+        "command": "excuteSql.copySpringQuery",
+        "title": "Copy Spring @Query SQL",
         "category": "Execute SQL"
       }
     ],
@@ -32,7 +54,44 @@
           "when": "resourceExtname == .sql",
           "group": "navigation@50"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "excuteSql.runSpringQuery",
+          "when": "editorLangId == java",
+          "group": "navigation@50"
+        },
+        {
+          "command": "excuteSql.copySpringQuery",
+          "when": "editorLangId == java",
+          "group": "navigation@51"
+        }
       ]
+    },
+    "configuration": {
+      "title": "Execute SQL & Spring JPA",
+      "properties": {
+        "excuteSql.spring.autoPickDatasource": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically pick a SQLTools connection matching spring.datasource.url from application.properties/yml"
+        },
+        "excuteSql.spring.javaGlob": {
+          "type": "string",
+          "default": "**/src/main/java/**/*.java",
+          "description": "Glob pattern for Java source files to index for JPA entities"
+        },
+        "excuteSql.spring.connectionMappings": {
+          "type": "object",
+          "default": {},
+          "description": "Map Spring JDBC URLs to SQLTools connection names, e.g. {\"jdbc:postgresql://localhost:5432/mydb\": \"My Postgres\"}"
+        },
+        "excuteSql.spring.cacheIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Persist entity index to workspace storage for faster reopen and lower memory use"
+        }
+      }
     }
   },
   "scripts": {
@@ -40,6 +99,9 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

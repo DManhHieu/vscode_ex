@@ -56,7 +56,7 @@ async function readSqlFile(uri: vscode.Uri): Promise<string> {
   return Buffer.from(data).toString('utf8');
 }
 
-async function executeSqlQuery(
+export async function executeSqlQuery(
   query: string,
   connNameOrId: string
 ): Promise<unknown> {
@@ -170,6 +170,60 @@ export async function runSqlFilesInOrder(
       vscode.window.showInformationMessage(
         `Successfully executed ${sqlFiles.length} SQL file(s) in order.`
       );
+    }
+  );
+}
+
+export async function runQueryString(
+  query: string,
+  connNameOrId: string,
+  label: string
+): Promise<void> {
+  if (!isActive()) {
+    return;
+  }
+
+  const trimmed = query.trim();
+  if (!trimmed) {
+    vscode.window.showWarningMessage('Query is empty.');
+    return;
+  }
+
+  log(`Running query: ${label}`);
+  log(`Connection: ${connNameOrId}`);
+  log(`SQL:\n${trimmed}`);
+  showOutput();
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'Execute SQL Query',
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const result = await executeSqlQuery(trimmed, connNameOrId);
+
+        if (result === undefined) {
+          throw new Error(
+            'SQLTools execution failed. Check the SQLTools output channel for details.'
+          );
+        }
+
+        const failureMessage = isExecutionFailure(result);
+
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
+
+        log(`Query completed successfully: ${label}`);
+        vscode.window.showInformationMessage(`Query executed successfully: ${label}`);
+      } catch (error) {
+        const message = getErrorMessage(error);
+        log(`Query failed: ${label} — ${message}`);
+        showOutput();
+        vscode.window.showErrorMessage(`Query failed: ${message}`);
+      }
     }
   );
 }

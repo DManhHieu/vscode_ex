@@ -38,18 +38,29 @@ exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const connection_1 = require("./connection");
 const runner_1 = require("./runner");
+const workspaceScanner_1 = require("./spring/index/workspaceScanner");
+const runQueryCodeLens_1 = require("./spring/providers/runQueryCodeLens");
+const queryCompletionProvider_1 = require("./spring/providers/queryCompletionProvider");
+const springDefinitionProvider_1 = require("./spring/providers/springDefinitionProvider");
+const repositoryDiagnosticProvider_1 = require("./spring/providers/repositoryDiagnosticProvider");
+const JAVA_SELECTOR = { language: 'java', scheme: 'file' };
 function activate(context) {
     let isActive = true;
     context.subscriptions.push({
         dispose: () => {
             isActive = false;
             (0, runner_1.disposeRunner)();
+            (0, workspaceScanner_1.disposeWorkspaceScanner)();
         },
     });
     const outputChannel = vscode.window.createOutputChannel('Execute SQL');
     context.subscriptions.push(outputChannel);
     (0, runner_1.initRunner)(outputChannel, () => isActive);
-    const disposable = vscode.commands.registerCommand('excuteSql.runMultiple', async (contextUri, allSelections) => {
+    (0, workspaceScanner_1.startWorkspaceScanner)(context);
+    const diagnosticProvider = new repositoryDiagnosticProvider_1.RepositoryDiagnosticProvider();
+    context.subscriptions.push({ dispose: () => diagnosticProvider.dispose() });
+    (0, workspaceScanner_1.setOnIndexUpdated)(() => diagnosticProvider.validateAllOpenDocuments());
+    const runMultipleDisposable = vscode.commands.registerCommand('excuteSql.runMultiple', async (contextUri, allSelections) => {
         try {
             let uris = (0, runner_1.resolveSelectedUris)(contextUri, allSelections);
             if (uris.length === 0) {
@@ -59,7 +70,10 @@ function activate(context) {
                 }
                 uris = picked;
             }
-            const connNameOrId = await (0, connection_1.pickSqlToolsConnection)();
+            const autoPick = vscode.workspace.getConfiguration('excuteSql.spring').get('autoPickDatasource') ?? true;
+            const connNameOrId = autoPick
+                ? await (0, connection_1.resolveConnectionId)(true)
+                : await (0, connection_1.pickSqlToolsConnection)();
             if (!connNameOrId) {
                 return;
             }
@@ -70,9 +84,62 @@ function activate(context) {
             vscode.window.showErrorMessage(`Execute SQL Files: ${message}`);
         }
     });
-    context.subscriptions.push(disposable);
+    const runSpringQueryDisposable = vscode.commands.registerCommand('excuteSql.runSpringQuery', async (uri, line) => {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            const targetUri = uri ?? editor?.document.uri;
+            const targetLine = line ?? editor?.selection.active.line;
+            if (!targetUri || targetLine === undefined) {
+                vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
+                return;
+            }
+            await (0, runQueryCodeLens_1.runSpringQueryAtLine)(targetUri, targetLine);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Run Spring Query: ${message}`);
+        }
+    });
+    const refreshIndexDisposable = vscode.commands.registerCommand('excuteSql.refreshSpringIndex', async () => {
+        await (0, workspaceScanner_1.rebuildIndex)(true);
+        diagnosticProvider.validateAllOpenDocuments();
+        vscode.window.showInformationMessage('Spring JPA index refreshed.');
+    });
+    const copySpringQueryDisposable = vscode.commands.registerCommand('excuteSql.copySpringQuery', async (uri, line) => {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            const targetUri = uri ?? editor?.document.uri;
+            const targetLine = line ?? editor?.selection.active.line;
+            if (!targetUri || targetLine === undefined) {
+                vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
+                return;
+            }
+            await (0, runQueryCodeLens_1.copySpringQueryAtLine)(targetUri, targetLine);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Copy Spring Query: ${message}`);
+        }
+    });
+    const codeLensProvider = new runQueryCodeLens_1.RunQueryCodeLensProvider();
+    context.subscriptions.push(vscode.languages.registerCodeLensProvider(JAVA_SELECTOR, codeLensProvider));
+    const completionProvider = new queryCompletionProvider_1.QueryCompletionProvider();
+    context.subscriptions.push(vscode.languages.registerCompletionItemProvider(JAVA_SELECTOR, completionProvider, '.', ':', ' ', '\n'));
+    const definitionProvider = new springDefinitionProvider_1.SpringDefinitionProvider();
+    context.subscriptions.push(vscode.languages.registerDefinitionProvider(JAVA_SELECTOR, definitionProvider));
+    const validateDiagnostics = (doc) => {
+        if (doc.languageId === 'java') {
+            diagnosticProvider.validateDocument(doc);
+        }
+    };
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(validateDiagnostics), vscode.workspace.onDidChangeTextDocument((e) => validateDiagnostics(e.document)), vscode.workspace.onDidSaveTextDocument(validateDiagnostics));
+    for (const doc of vscode.workspace.textDocuments) {
+        validateDiagnostics(doc);
+    }
+    context.subscriptions.push(runMultipleDisposable, runSpringQueryDisposable, refreshIndexDisposable, copySpringQueryDisposable);
 }
 function deactivate() {
     (0, runner_1.disposeRunner)();
+    (0, workspaceScanner_1.disposeWorkspaceScanner)();
 }
 //# sourceMappingURL=extension.js.map

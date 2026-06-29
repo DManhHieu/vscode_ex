@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.isSqlToolsAvailable = isSqlToolsAvailable;
 exports.ensureSqlToolsActive = ensureSqlToolsActive;
 exports.getSqlToolsConnections = getSqlToolsConnections;
+exports.resolveConnectionId = resolveConnectionId;
 exports.pickSqlToolsConnection = pickSqlToolsConnection;
 const vscode = __importStar(require("vscode"));
 const SQLTOOLS_EXTENSION_ID = 'mtxr.sqltools';
@@ -55,6 +56,21 @@ async function getSqlToolsConnections() {
     await ensureSqlToolsActive();
     const connections = await vscode.commands.executeCommand('sqltools.getConnections', { connectedOnly: false, sort: 'connectedFirst' });
     return connections ?? [];
+}
+async function resolveConnectionId(preferSpring = true) {
+    if (preferSpring) {
+        try {
+            const { resolveSpringConnection } = await Promise.resolve().then(() => __importStar(require('./spring/springConnection')));
+            const springConn = await resolveSpringConnection();
+            if (springConn) {
+                return springConn;
+            }
+        }
+        catch {
+            // spring module not available or resolution failed
+        }
+    }
+    return pickSqlToolsConnection();
 }
 async function pickSqlToolsConnection() {
     const connections = await getSqlToolsConnections();

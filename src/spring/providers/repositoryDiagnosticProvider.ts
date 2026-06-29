@@ -3,11 +3,19 @@ import { getEntityIndex } from '../index/entityIndex';
 import { validateMethodAgainstEntity } from '../parsing/springDataParser';
 
 const DIAGNOSTIC_SOURCE = 'excute-sql-spring';
+const VALIDATE_DEBOUNCE_MS = 300;
 
 export class RepositoryDiagnosticProvider {
   private collection = vscode.languages.createDiagnosticCollection(DIAGNOSTIC_SOURCE);
+  private validateAllTimer: ReturnType<typeof setTimeout> | undefined;
+  private validateQueue: vscode.TextDocument[] = [];
+  private validateScheduled = false;
 
   dispose(): void {
+    if (this.validateAllTimer) {
+      clearTimeout(this.validateAllTimer);
+      this.validateAllTimer = undefined;
+    }
     this.collection.dispose();
   }
 
@@ -58,11 +66,47 @@ export class RepositoryDiagnosticProvider {
     }
   }
 
-  validateAllOpenDocuments(): void {
-    for (const editor of vscode.window.visibleTextEditors) {
-      if (editor.document.languageId === 'java') {
-        this.validateDocument(editor.document);
-      }
+  scheduleValidateDocument(document: vscode.TextDocument): void {
+    if (document.languageId !== 'java') {
+      return;
     }
+
+    if (!this.validateQueue.some((doc) => doc.uri.toString() === document.uri.toString())) {
+      this.validateQueue.push(document);
+    }
+    this.scheduleValidateQueue();
+  }
+
+  validateAllOpenDocuments(): void {
+    if (this.validateAllTimer) {
+      clearTimeout(this.validateAllTimer);
+    }
+
+    this.validateAllTimer = setTimeout(() => {
+      this.validateAllTimer = undefined;
+      for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document.languageId === 'java') {
+          this.scheduleValidateDocument(editor.document);
+        }
+      }
+    }, VALIDATE_DEBOUNCE_MS);
+  }
+
+  private scheduleValidateQueue(): void {
+    if (this.validateScheduled) {
+      return;
+    }
+
+    this.validateScheduled = true;
+    setImmediate(() => {
+      this.validateScheduled = false;
+      const batch = this.validateQueue.splice(0, 3);
+      for (const document of batch) {
+        this.validateDocument(document);
+      }
+      if (this.validateQueue.length > 0) {
+        this.scheduleValidateQueue();
+      }
+    });
   }
 }

@@ -9,9 +9,11 @@ import {
 } from './runner';
 
 const JAVA_SELECTOR: vscode.DocumentSelector = { language: 'java', scheme: 'file' };
-const SPRING_INIT_DELAY_MS = 5000;
+/** Defer heavy Spring indexing until Java/Gradle extensions have finished starting. */
+const SPRING_INIT_DELAY_MS = 10000;
 
 let springFeaturesStarted = false;
+let springInitTimer: ReturnType<typeof setTimeout> | undefined;
 
 function logError(scope: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -109,11 +111,13 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
       'excuteSql.refreshSpringIndex',
       async () => {
         try {
-          await rebuildIndex(true);
+          await rebuildIndex(true, { showProgress: true, showCompletion: true });
           diagnosticProvider.validateAllOpenDocuments();
-          vscode.window.showInformationMessage('Spring JPA index refreshed.');
         } catch (error) {
           logError('refreshSpringIndex', error);
+          vscode.window.showErrorMessage(
+            `Spring JPA index refresh failed: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
     );
@@ -150,9 +154,7 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
         JAVA_SELECTOR,
         completionProvider,
         '.',
-        ':',
-        ' ',
-        '\n'
+        ':'
       )
     );
 
@@ -163,7 +165,7 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
 
     const validateDiagnostics = (doc: vscode.TextDocument): void => {
       if (doc.languageId === 'java') {
-        diagnosticProvider.validateDocument(doc);
+        diagnosticProvider.scheduleValidateDocument(doc);
       }
     };
 
@@ -187,26 +189,43 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
   }
 }
 
-function scheduleSpringFeatures(context: vscode.ExtensionContext): void {
-  const hasJavaOrSpring =
-    vscode.workspace.textDocuments.some((doc) => doc.languageId === 'java') ||
-    vscode.workspace.workspaceFolders !== undefined;
+function hasOpenJavaDocuments(): boolean {
+  return vscode.workspace.textDocuments.some((doc) => doc.languageId === 'java');
+}
 
-  if (!hasJavaOrSpring) {
+function scheduleSpringFeaturesDeferred(context: vscode.ExtensionContext): void {
+  if (springFeaturesStarted || springInitTimer) {
     return;
   }
 
-  setTimeout(() => {
+  springInitTimer = setTimeout(() => {
+    springInitTimer = undefined;
     void startSpringFeatures(context);
   }, SPRING_INIT_DELAY_MS);
 
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument((doc) => {
-      if (doc.languageId === 'java') {
-        void startSpringFeatures(context);
+  context.subscriptions.push({
+    dispose: () => {
+      if (springInitTimer) {
+        clearTimeout(springInitTimer);
+        springInitTimer = undefined;
       }
-    })
-  );
+    },
+  });
+}
+
+function scheduleSpringFeatures(context: vscode.ExtensionContext): void {
+  if (hasOpenJavaDocuments()) {
+    scheduleSpringFeaturesDeferred(context);
+    return;
+  }
+
+  const onJavaOpened = vscode.workspace.onDidOpenTextDocument((doc) => {
+    if (doc.languageId === 'java') {
+      onJavaOpened.dispose();
+      scheduleSpringFeaturesDeferred(context);
+    }
+  });
+  context.subscriptions.push(onJavaOpened);
 }
 
 export function activate(context: vscode.ExtensionContext): void {

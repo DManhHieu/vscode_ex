@@ -4,6 +4,10 @@
   "description": "Execute SQL files and Spring JPA @Query annotations using SQLTools connections, with entity navigation, completion, and repository validation",
   "version": "0.3.1",
   "publisher": "local",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DManhHieu/vscode_ex.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -13,7 +17,7 @@
   ],
   "extensionDependencies": [],
   "activationEvents": [
-    "onStartupFinished",
+    "onLanguage:java",
     "onCommand:excuteSql.runMultiple",
     "onCommand:excuteSql.runSpringQuery",
     "onCommand:excuteSql.copySpringQuery",

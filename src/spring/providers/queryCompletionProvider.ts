@@ -32,6 +32,10 @@ export class QueryCompletionProvider implements vscode.CompletionItemProvider {
     }
 
     const content = document.getText();
+    if (!content.includes('@Query')) {
+      return [];
+    }
+
     const offset = document.offsetAt(position);
     const query = isInsideQueryString(content, offset);
 

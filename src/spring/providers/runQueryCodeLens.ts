@@ -4,10 +4,22 @@ import { resolveSpringConnection } from '../springConnection';
 import { promptQueryParameters, substituteQueryParameters } from '../queryParams';
 import { runQueryString } from '../../runner';
 
+const codeLensCache = new Map<string, vscode.CodeLens[]>();
+
+function getCodeLensCacheKey(document: vscode.TextDocument): string {
+  return `${document.uri.toString()}#${document.version}`;
+}
+
 export class RunQueryCodeLensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
-    if (document.languageId !== 'java') {
+    if (document.languageId !== 'java' || !document.getText().includes('@Query')) {
       return [];
+    }
+
+    const cacheKey = getCodeLensCacheKey(document);
+    const cached = codeLensCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     const content = document.getText();
@@ -28,6 +40,14 @@ export class RunQueryCodeLensProvider implements vscode.CodeLensProvider {
           arguments: [document.uri, query.startLine],
         })
       );
+    }
+
+    codeLensCache.set(cacheKey, lenses);
+    if (codeLensCache.size > 50) {
+      const oldest = codeLensCache.keys().next().value;
+      if (oldest) {
+        codeLensCache.delete(oldest);
+      }
     }
 
     return lenses;

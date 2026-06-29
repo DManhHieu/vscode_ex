@@ -92,22 +92,26 @@ export class EntityIndex {
 
   hydrateFromCache(files: Record<string, CachedFileEntry>): void {
     for (const [uriStr, entry] of Object.entries(files)) {
-      const uri = vscode.Uri.parse(uriStr);
-      this.removeFile(uri);
+      this.hydrateFileFromCache(uriStr, entry);
+    }
+  }
 
-      if (entry.entity) {
-        const meta: EntityMetadata = { ...entry.entity, fileUri: uri };
-        this.entities.set(meta.className.toLowerCase(), meta);
-        this.entities.set(meta.entityName.toLowerCase(), meta);
-        this.entitiesByTable.set(meta.tableName.toLowerCase(), meta);
-        this.fileEntityMap.set(uriStr, meta);
-      }
+  hydrateFileFromCache(uriStr: string, entry: CachedFileEntry): void {
+    const uri = vscode.Uri.parse(uriStr);
+    this.removeFile(uri);
 
-      if (entry.repositories && entry.repositories.length > 0) {
-        const repoMetas = entry.repositories.map((r) => ({ ...r, fileUri: uri }));
-        this.fileRepoMap.set(uriStr, repoMetas);
-        this.repositories.push(...repoMetas);
-      }
+    if (entry.entity) {
+      const meta: EntityMetadata = { ...entry.entity, fileUri: uri };
+      this.entities.set(meta.className.toLowerCase(), meta);
+      this.entities.set(meta.entityName.toLowerCase(), meta);
+      this.entitiesByTable.set(meta.tableName.toLowerCase(), meta);
+      this.fileEntityMap.set(uriStr, meta);
+    }
+
+    if (entry.repositories && entry.repositories.length > 0) {
+      const repoMetas = entry.repositories.map((r) => ({ ...r, fileUri: uri }));
+      this.fileRepoMap.set(uriStr, repoMetas);
+      this.repositories.push(...repoMetas);
     }
   }
 

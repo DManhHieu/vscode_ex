@@ -12,6 +12,7 @@ function hashWorkspaceRoot(root: string): string {
 export const CACHE_VERSION = 1;
 const CACHE_FILENAME = 'spring-jpa-index.json';
 const SAVE_DEBOUNCE_MS = 2000;
+const HYDRATE_YIELD_EVERY = 200;
 
 export interface IndexCacheData {
   version: number;
@@ -91,10 +92,17 @@ export async function loadCache(javaGlob: string): Promise<IndexCacheData | unde
   }
 }
 
-export function hydrateIndexFromCache(cache: IndexCacheData): void {
+export async function hydrateIndexFromCache(cache: IndexCacheData): Promise<void> {
   const index = getEntityIndex();
   index.clear();
-  index.hydrateFromCache(cache.files);
+  const entries = Object.entries(cache.files);
+  for (let i = 0; i < entries.length; i++) {
+    const [uriStr, entry] = entries[i];
+    index.hydrateFileFromCache(uriStr, entry);
+    if (i > 0 && i % HYDRATE_YIELD_EVERY === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
 }
 
 export async function saveCacheNow(javaGlob: string): Promise<void> {

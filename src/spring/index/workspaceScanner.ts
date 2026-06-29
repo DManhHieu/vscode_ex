@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { getEntityIndex } from './entityIndex';
 import {
   clearCacheFile,
@@ -23,10 +24,18 @@ function notifyIndexUpdated(): void {
   onIndexUpdated?.();
 }
 
+type ProgressReporter = (message: string, increment?: number) => void;
+
+export interface IndexOperationOptions {
+  showProgress?: boolean;
+  showCompletion?: boolean;
+}
+
 const DEFAULT_JAVA_GLOB = '**/src/main/java/**/*.java';
+const FIND_FILES_EXCLUDE = '{**/node_modules/**,**/target/**,**/build/**,**/.git/**}';
 const DEBOUNCE_MS = 1000;
-const INDEX_BATCH_SIZE = 20;
-const STARTUP_DELAY_MS = 5000;
+const INDEX_BATCH_SIZE = 10;
+const STAT_BATCH_SIZE = 25;
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let watcher: vscode.FileSystemWatcher | undefined;
@@ -71,14 +80,24 @@ export async function indexJavaFile(uri: vscode.Uri, saveToCache = true): Promis
 }
 
 async function findJavaFiles(): Promise<vscode.Uri[]> {
-  return vscode.workspace.findFiles(javaGlob, '**/node_modules/**');
+  return vscode.workspace.findFiles(javaGlob, FIND_FILES_EXCLUDE);
 }
 
-async function indexFilesInBatches(files: vscode.Uri[]): Promise<void> {
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function indexFilesInBatches(files: vscode.Uri[], report?: ProgressReporter): Promise<void> {
   const index = getEntityIndex();
 
   for (let i = 0; i < files.length; i += INDEX_BATCH_SIZE) {
     const batch = files.slice(i, i + INDEX_BATCH_SIZE);
+    const processed = Math.min(i + batch.length, files.length);
+    report?.(
+      `Indexing ${processed}/${files.length} Java files`,
+      files.length > 0 ? (batch.length / files.length) * 100 : undefined
+    );
+
     await Promise.all(
       batch.map(async (uri) => {
         const stat = await getFileStat(uri);
@@ -91,27 +110,90 @@ async function indexFilesInBatches(files: vscode.Uri[]): Promise<void> {
         }
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await yieldToEventLoop();
   }
 }
 
-export async function rebuildIndex(clearCache = false): Promise<void> {
-  if (clearCache) {
-    await clearCacheFile();
+async function runIndexOperation<T>(
+  title: string,
+  options: IndexOperationOptions | undefined,
+  task: (report: ProgressReporter) => Promise<T>
+): Promise<T> {
+  const showProgress = options?.showProgress ?? true;
+
+  if (!showProgress) {
+    return task(() => undefined);
   }
 
-  const index = getEntityIndex();
-  index.clear();
-
-  const files = await findJavaFiles();
-  await indexFilesInBatches(files);
-
-  await saveCacheNow(javaGlob);
-  notifyIndexUpdated();
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title,
+      cancellable: false,
+    },
+    async (progress) => {
+      const report: ProgressReporter = (message, increment) => {
+        progress.report({ message, increment });
+      };
+      return task(report);
+    }
+  );
 }
 
-async function deltaScan(): Promise<void> {
+function summarizeIndex(): string {
   const index = getEntityIndex();
+  const entityCount = index.getAllEntities().length;
+  const repositoryCount = index.getRepositories().length;
+  return `${entityCount} entit${entityCount === 1 ? 'y' : 'ies'}, ${repositoryCount} repositor${repositoryCount === 1 ? 'y' : 'ies'}`;
+}
+
+export async function rebuildIndex(
+  clearCache = false,
+  options?: IndexOperationOptions,
+  parentReport?: ProgressReporter
+): Promise<void> {
+  const execute = async (report: ProgressReporter) => {
+    if (clearCache) {
+      report('Clearing cached index...');
+      await clearCacheFile();
+    }
+
+    const index = getEntityIndex();
+    index.clear();
+
+    report('Finding Java source files...');
+    const files = await findJavaFiles();
+
+    if (files.length === 0) {
+      await saveCacheNow(javaGlob);
+      notifyIndexUpdated();
+      return;
+    }
+
+    await indexFilesInBatches(files, report);
+
+    report('Saving index cache...');
+    await saveCacheNow(javaGlob);
+    notifyIndexUpdated();
+
+    if (options?.showCompletion) {
+      vscode.window.showInformationMessage(
+        `Spring JPA index refreshed (${summarizeIndex()}).`
+      );
+    }
+  };
+
+  if (parentReport) {
+    await execute(parentReport);
+    return;
+  }
+
+  await runIndexOperation('Spring JPA Index', options, execute);
+}
+
+async function deltaScan(report?: ProgressReporter): Promise<boolean> {
+  const index = getEntityIndex();
+  report?.('Checking for changed Java files...');
   const files = await findJavaFiles();
   const currentPaths = new Set(files.map((f) => f.toString()));
   let changed = false;
@@ -123,22 +205,40 @@ async function deltaScan(): Promise<void> {
     }
   }
 
-  for (const uri of files) {
-    const stat = await getFileStat(uri);
-    if (!stat) {
-      continue;
-    }
+  const staleFiles: vscode.Uri[] = [];
+  for (let i = 0; i < files.length; i += STAT_BATCH_SIZE) {
+    const batch = files.slice(i, i + STAT_BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(async (uri) => {
+        const stat = await getFileStat(uri);
+        if (!stat || isFileUnchanged(uri, stat.mtimeMs, stat.size)) {
+          return undefined;
+        }
+        return uri;
+      })
+    );
+    staleFiles.push(...results.filter((uri): uri is vscode.Uri => uri !== undefined));
+    await yieldToEventLoop();
+  }
 
-    if (!isFileUnchanged(uri, stat.mtimeMs, stat.size)) {
+  if (staleFiles.length > 0) {
+    for (let i = 0; i < staleFiles.length; i++) {
+      const uri = staleFiles[i];
+      report?.(
+        `Updating ${i + 1}/${staleFiles.length}: ${path.basename(uri.fsPath)}`,
+        staleFiles.length > 0 ? (1 / staleFiles.length) * 100 : undefined
+      );
       await indexJavaFile(uri, false);
       changed = true;
     }
   }
 
   if (changed) {
+    report?.('Saving index cache...');
     await saveCacheNow(javaGlob);
-    notifyIndexUpdated();
   }
+
+  return changed;
 }
 
 async function initializeIndex(): Promise<void> {
@@ -150,20 +250,25 @@ async function initializeIndex(): Promise<void> {
   javaGlob = getJavaGlob();
 
   try {
-    const cache = await loadCache(javaGlob);
+    await runIndexOperation('Spring JPA Index', { showProgress: false }, async (report) => {
+      const cache = await loadCache(javaGlob);
 
-    if (cache) {
-      hydrateIndexFromCache(cache);
-      notifyIndexUpdated();
-      await deltaScan();
-    } else {
-      await rebuildIndex(false);
-    }
+      if (cache) {
+        report('Loading cached index...');
+        await hydrateIndexFromCache(cache);
+        await deltaScan(report);
+        notifyIndexUpdated();
+      } else {
+        report('Building index from workspace...');
+        await rebuildIndex(false, undefined, report);
+      }
+    });
 
     indexInitialized = true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Execute SQL: index initialization failed: ${message}`);
+    vscode.window.showErrorMessage(`Spring JPA index failed: ${message}`);
   } finally {
     indexInitializing = false;
   }
@@ -193,9 +298,7 @@ function handleFileDelete(uri: vscode.Uri): void {
 }
 
 export function scheduleIndexInitialization(): void {
-  setTimeout(() => {
-    void initializeIndex();
-  }, STARTUP_DELAY_MS);
+  void initializeIndex();
 }
 
 export function startWorkspaceScanner(context: vscode.ExtensionContext): void {

@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import * as yaml from 'yaml';
 
 export interface SpringDatasource {
   url?: string;
@@ -11,16 +10,50 @@ export interface SpringDatasource {
   configFile: string;
 }
 
-function flattenYaml(obj: Record<string, unknown>, prefix = ''): Record<string, string> {
+/** Lightweight YAML flattener for Spring config files (no external dependency). */
+export function parseYamlContent(content: string): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    const fullKey = prefix ? `${prefix}.${key}` : key;
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      Object.assign(result, flattenYaml(value as Record<string, unknown>, fullKey));
-    } else if (value !== undefined && value !== null) {
-      result[fullKey] = String(value);
+  const stack: Array<{ indent: number; key: string }> = [];
+
+  for (const rawLine of content.split('\n')) {
+    const withoutComment = rawLine.split('#')[0];
+    if (!withoutComment.trim()) {
+      continue;
+    }
+
+    const indent = withoutComment.search(/\S/);
+    if (indent < 0) {
+      continue;
+    }
+
+    const trimmed = withoutComment.trim();
+    const colonIndex = trimmed.indexOf(':');
+    if (colonIndex < 0) {
+      continue;
+    }
+
+    const key = trimmed.substring(0, colonIndex).trim();
+    let value = trimmed.substring(colonIndex + 1).trim();
+
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const fullKey = [...stack.map((entry) => entry.key), key].join('.');
+
+    if (value) {
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      result[fullKey] = value;
+    } else {
+      stack.push({ indent, key });
     }
   }
+
   return result;
 }
 
@@ -43,18 +76,6 @@ export function parsePropertiesContent(content: string): Record<string, string> 
     result[key] = value;
   }
   return result;
-}
-
-export function parseYamlContent(content: string): Record<string, string> {
-  try {
-    const parsed = yaml.parse(content);
-    if (parsed && typeof parsed === 'object') {
-      return flattenYaml(parsed as Record<string, unknown>);
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return {};
 }
 
 function extractDatasource(props: Record<string, string>): SpringDatasource | undefined {

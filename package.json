@@ -2,7 +2,7 @@
   "name": "excute-sql",
   "displayName": "Execute SQL & Spring JPA",
   "description": "Execute SQL files and Spring JPA @Query annotations using SQLTools connections, with entity navigation, completion, and repository validation",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,17 +11,13 @@
     "Other",
     "Programming Languages"
   ],
-  "extensionDependencies": [
-    "mtxr.sqltools"
-  ],
-  "extensionPack": [],
+  "extensionDependencies": [],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:excuteSql.runMultiple",
     "onCommand:excuteSql.runSpringQuery",
     "onCommand:excuteSql.copySpringQuery",
-    "onLanguage:java",
-    "workspaceContains:**/application.properties",
-    "workspaceContains:**/application.yml"
+    "onCommand:excuteSql.refreshSpringIndex"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -99,9 +95,6 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package"
-  },
-  "dependencies": {
-    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

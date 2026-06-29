@@ -19,9 +19,18 @@ VS Code extension for batch SQL execution and IntelliJ-style Spring JPA support.
 
 ## Requirements
 
-- [SQLTools](https://marketplace.visualstudio.com/items?itemName=mtxr.sqltools) (required)
+- [SQLTools](https://marketplace.visualstudio.com/items?itemName=mtxr.sqltools) (recommended — required for running SQL)
 - [Language Support for Java](https://marketplace.visualstudio.com/items?itemName=redhat.java) (recommended)
 - [Spring Boot Tools](https://marketplace.visualstudio.com/items?itemName=vmware.vscode-spring-boot) (recommended for syntax highlighting)
+
+## Troubleshooting
+
+If Java/Gradle extensions fail to load after installing this extension:
+
+1. **Update to v0.3.1+** — fixes startup contention and missing bundled dependencies.
+2. **Reload VS Code** after installing (`Developer: Reload Window`).
+3. Spring JPA indexing is **deferred 5 seconds** after startup so Java/Gradle can initialize first.
+4. Install SQLTools separately if you need query execution (no longer a hard dependency).
 
 ## Commands
 

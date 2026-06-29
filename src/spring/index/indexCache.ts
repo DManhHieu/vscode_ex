@@ -1,6 +1,13 @@
-import * as crypto from 'crypto';
 import * as vscode from 'vscode';
-import { CachedFileEntry, EntityIndex, getEntityIndex } from './entityIndex';
+import { CachedFileEntry, getEntityIndex } from './entityIndex';
+
+function hashWorkspaceRoot(root: string): string {
+  let hash = 0;
+  for (let i = 0; i < root.length; i++) {
+    hash = (hash * 31 + root.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
 
 export const CACHE_VERSION = 1;
 const CACHE_FILENAME = 'spring-jpa-index.json';
@@ -44,7 +51,7 @@ async function getCacheUri(): Promise<vscode.Uri | undefined> {
     return undefined;
   }
 
-  const hash = crypto.createHash('sha256').update(root).digest('hex').substring(0, 16);
+  const hash = hashWorkspaceRoot(root);
   const dir = vscode.Uri.joinPath(extensionContext.globalStorageUri, 'workspace-cache', hash);
   await vscode.workspace.fs.createDirectory(dir);
   return vscode.Uri.joinPath(dir, CACHE_FILENAME);

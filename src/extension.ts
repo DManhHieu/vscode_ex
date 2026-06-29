@@ -7,35 +7,21 @@ import {
   resolveSelectedUris,
   runSqlFilesInOrder,
 } from './runner';
-import { rebuildIndex, startWorkspaceScanner, disposeWorkspaceScanner, setOnIndexUpdated } from './spring/index/workspaceScanner';
-import { RunQueryCodeLensProvider, runSpringQueryAtLine, copySpringQueryAtLine } from './spring/providers/runQueryCodeLens';
-import { QueryCompletionProvider } from './spring/providers/queryCompletionProvider';
-import { SpringDefinitionProvider } from './spring/providers/springDefinitionProvider';
-import { RepositoryDiagnosticProvider } from './spring/providers/repositoryDiagnosticProvider';
 
 const JAVA_SELECTOR: vscode.DocumentSelector = { language: 'java', scheme: 'file' };
+const SPRING_INIT_DELAY_MS = 5000;
 
-export function activate(context: vscode.ExtensionContext): void {
-  let isActive = true;
-  context.subscriptions.push({
-    dispose: () => {
-      isActive = false;
-      disposeRunner();
-      disposeWorkspaceScanner();
-    },
-  });
+let springFeaturesStarted = false;
 
-  const outputChannel = vscode.window.createOutputChannel('Execute SQL');
-  context.subscriptions.push(outputChannel);
-  initRunner(outputChannel, () => isActive);
+function logError(scope: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Execute SQL [${scope}]: ${message}`);
+}
 
-  startWorkspaceScanner(context);
-
-  const diagnosticProvider = new RepositoryDiagnosticProvider();
-  context.subscriptions.push({ dispose: () => diagnosticProvider.dispose() });
-
-  setOnIndexUpdated(() => diagnosticProvider.validateAllOpenDocuments());
-
+function registerCoreCommands(
+  context: vscode.ExtensionContext,
+  isActive: () => boolean
+): void {
   const runMultipleDisposable = vscode.commands.registerCommand(
     'excuteSql.runMultiple',
     async (contextUri?: vscode.Uri, allSelections?: vscode.Uri[]) => {
@@ -60,110 +46,187 @@ export function activate(context: vscode.ExtensionContext): void {
 
         await runSqlFilesInOrder(uris, connNameOrId);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Execute SQL Files: ${message}`);
+        logError('runMultiple', error);
+        vscode.window.showErrorMessage(`Execute SQL Files: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   );
 
-  const runSpringQueryDisposable = vscode.commands.registerCommand(
-    'excuteSql.runSpringQuery',
-    async (uri?: vscode.Uri, line?: number) => {
-      try {
-        const editor = vscode.window.activeTextEditor;
-        const targetUri = uri ?? editor?.document.uri;
-        const targetLine = line ?? editor?.selection.active.line;
+  context.subscriptions.push(runMultipleDisposable);
+}
 
-        if (!targetUri || targetLine === undefined) {
-          vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
-          return;
+async function startSpringFeatures(context: vscode.ExtensionContext): Promise<void> {
+  if (springFeaturesStarted) {
+    return;
+  }
+  springFeaturesStarted = true;
+
+  try {
+    const [
+      { rebuildIndex, startWorkspaceScanner, disposeWorkspaceScanner, setOnIndexUpdated },
+      { RunQueryCodeLensProvider, runSpringQueryAtLine, copySpringQueryAtLine },
+      { QueryCompletionProvider },
+      { SpringDefinitionProvider },
+      { RepositoryDiagnosticProvider },
+    ] = await Promise.all([
+      import('./spring/index/workspaceScanner'),
+      import('./spring/providers/runQueryCodeLens'),
+      import('./spring/providers/queryCompletionProvider'),
+      import('./spring/providers/springDefinitionProvider'),
+      import('./spring/providers/repositoryDiagnosticProvider'),
+    ]);
+
+    context.subscriptions.push({ dispose: () => disposeWorkspaceScanner() });
+
+    const diagnosticProvider = new RepositoryDiagnosticProvider();
+    context.subscriptions.push({ dispose: () => diagnosticProvider.dispose() });
+
+    setOnIndexUpdated(() => diagnosticProvider.validateAllOpenDocuments());
+    startWorkspaceScanner(context);
+
+    const runSpringQueryDisposable = vscode.commands.registerCommand(
+      'excuteSql.runSpringQuery',
+      async (uri?: vscode.Uri, line?: number) => {
+        try {
+          const editor = vscode.window.activeTextEditor;
+          const targetUri = uri ?? editor?.document.uri;
+          const targetLine = line ?? editor?.selection.active.line;
+
+          if (!targetUri || targetLine === undefined) {
+            vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
+            return;
+          }
+
+          await runSpringQueryAtLine(targetUri, targetLine);
+        } catch (error) {
+          logError('runSpringQuery', error);
+          vscode.window.showErrorMessage(`Run Spring Query: ${error instanceof Error ? error.message : String(error)}`);
         }
-
-        await runSpringQueryAtLine(targetUri, targetLine);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Run Spring Query: ${message}`);
       }
-    }
-  );
+    );
 
-  const refreshIndexDisposable = vscode.commands.registerCommand(
-    'excuteSql.refreshSpringIndex',
-    async () => {
-      await rebuildIndex(true);
-      diagnosticProvider.validateAllOpenDocuments();
-      vscode.window.showInformationMessage('Spring JPA index refreshed.');
-    }
-  );
-
-  const copySpringQueryDisposable = vscode.commands.registerCommand(
-    'excuteSql.copySpringQuery',
-    async (uri?: vscode.Uri, line?: number) => {
-      try {
-        const editor = vscode.window.activeTextEditor;
-        const targetUri = uri ?? editor?.document.uri;
-        const targetLine = line ?? editor?.selection.active.line;
-
-        if (!targetUri || targetLine === undefined) {
-          vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
-          return;
+    const refreshIndexDisposable = vscode.commands.registerCommand(
+      'excuteSql.refreshSpringIndex',
+      async () => {
+        try {
+          await rebuildIndex(true);
+          diagnosticProvider.validateAllOpenDocuments();
+          vscode.window.showInformationMessage('Spring JPA index refreshed.');
+        } catch (error) {
+          logError('refreshSpringIndex', error);
         }
-
-        await copySpringQueryAtLine(targetUri, targetLine);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Copy Spring Query: ${message}`);
       }
+    );
+
+    const copySpringQueryDisposable = vscode.commands.registerCommand(
+      'excuteSql.copySpringQuery',
+      async (uri?: vscode.Uri, line?: number) => {
+        try {
+          const editor = vscode.window.activeTextEditor;
+          const targetUri = uri ?? editor?.document.uri;
+          const targetLine = line ?? editor?.selection.active.line;
+
+          if (!targetUri || targetLine === undefined) {
+            vscode.window.showWarningMessage('Open a Java file with a @Query annotation.');
+            return;
+          }
+
+          await copySpringQueryAtLine(targetUri, targetLine);
+        } catch (error) {
+          logError('copySpringQuery', error);
+          vscode.window.showErrorMessage(`Copy Spring Query: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    );
+
+    const codeLensProvider = new RunQueryCodeLensProvider();
+    context.subscriptions.push(
+      vscode.languages.registerCodeLensProvider(JAVA_SELECTOR, codeLensProvider)
+    );
+
+    const completionProvider = new QueryCompletionProvider();
+    context.subscriptions.push(
+      vscode.languages.registerCompletionItemProvider(
+        JAVA_SELECTOR,
+        completionProvider,
+        '.',
+        ':',
+        ' ',
+        '\n'
+      )
+    );
+
+    const definitionProvider = new SpringDefinitionProvider();
+    context.subscriptions.push(
+      vscode.languages.registerDefinitionProvider(JAVA_SELECTOR, definitionProvider)
+    );
+
+    const validateDiagnostics = (doc: vscode.TextDocument): void => {
+      if (doc.languageId === 'java') {
+        diagnosticProvider.validateDocument(doc);
+      }
+    };
+
+    context.subscriptions.push(
+      vscode.workspace.onDidOpenTextDocument(validateDiagnostics),
+      vscode.workspace.onDidSaveTextDocument(validateDiagnostics)
+    );
+
+    for (const doc of vscode.workspace.textDocuments) {
+      validateDiagnostics(doc);
     }
-  );
 
-  const codeLensProvider = new RunQueryCodeLensProvider();
-  context.subscriptions.push(
-    vscode.languages.registerCodeLensProvider(JAVA_SELECTOR, codeLensProvider)
-  );
+    context.subscriptions.push(
+      runSpringQueryDisposable,
+      refreshIndexDisposable,
+      copySpringQueryDisposable
+    );
+  } catch (error) {
+    springFeaturesStarted = false;
+    logError('startSpringFeatures', error);
+  }
+}
 
-  const completionProvider = new QueryCompletionProvider();
-  context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider(
-      JAVA_SELECTOR,
-      completionProvider,
-      '.',
-      ':',
-      ' ',
-      '\n'
-    )
-  );
+function scheduleSpringFeatures(context: vscode.ExtensionContext): void {
+  const hasJavaOrSpring =
+    vscode.workspace.textDocuments.some((doc) => doc.languageId === 'java') ||
+    vscode.workspace.workspaceFolders !== undefined;
 
-  const definitionProvider = new SpringDefinitionProvider();
-  context.subscriptions.push(
-    vscode.languages.registerDefinitionProvider(JAVA_SELECTOR, definitionProvider)
-  );
-
-  const validateDiagnostics = (doc: vscode.TextDocument): void => {
-    if (doc.languageId === 'java') {
-      diagnosticProvider.validateDocument(doc);
-    }
-  };
-
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(validateDiagnostics),
-    vscode.workspace.onDidChangeTextDocument((e) => validateDiagnostics(e.document)),
-    vscode.workspace.onDidSaveTextDocument(validateDiagnostics)
-  );
-
-  for (const doc of vscode.workspace.textDocuments) {
-    validateDiagnostics(doc);
+  if (!hasJavaOrSpring) {
+    return;
   }
 
+  setTimeout(() => {
+    void startSpringFeatures(context);
+  }, SPRING_INIT_DELAY_MS);
+
   context.subscriptions.push(
-    runMultipleDisposable,
-    runSpringQueryDisposable,
-    refreshIndexDisposable,
-    copySpringQueryDisposable
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (doc.languageId === 'java') {
+        void startSpringFeatures(context);
+      }
+    })
   );
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  let isActive = true;
+
+  const outputChannel = vscode.window.createOutputChannel('Execute SQL');
+  context.subscriptions.push(outputChannel);
+  initRunner(outputChannel, () => isActive);
+
+  registerCoreCommands(context, () => isActive);
+  scheduleSpringFeatures(context);
+
+  context.subscriptions.push({
+    dispose: () => {
+      isActive = false;
+      disposeRunner();
+    },
+  });
 }
 
 export function deactivate(): void {
   disposeRunner();
-  disposeWorkspaceScanner();
 }

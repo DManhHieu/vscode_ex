@@ -24,11 +24,15 @@ function notifyIndexUpdated(): void {
 }
 
 const DEFAULT_JAVA_GLOB = '**/src/main/java/**/*.java';
-const DEBOUNCE_MS = 500;
+const DEBOUNCE_MS = 1000;
+const INDEX_BATCH_SIZE = 20;
+const STARTUP_DELAY_MS = 5000;
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let watcher: vscode.FileSystemWatcher | undefined;
 let javaGlob = DEFAULT_JAVA_GLOB;
+let indexInitialized = false;
+let indexInitializing = false;
 
 function getJavaGlob(): string {
   return vscode.workspace.getConfiguration('excuteSql.spring').get<string>('javaGlob') ?? DEFAULT_JAVA_GLOB;
@@ -70,6 +74,27 @@ async function findJavaFiles(): Promise<vscode.Uri[]> {
   return vscode.workspace.findFiles(javaGlob, '**/node_modules/**');
 }
 
+async function indexFilesInBatches(files: vscode.Uri[]): Promise<void> {
+  const index = getEntityIndex();
+
+  for (let i = 0; i < files.length; i += INDEX_BATCH_SIZE) {
+    const batch = files.slice(i, i + INDEX_BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (uri) => {
+        const stat = await getFileStat(uri);
+        const content = await readFileContent(uri);
+        if (content) {
+          index.indexFile(uri, content);
+          if (stat) {
+            updateFileFingerprint(uri, stat.mtimeMs, stat.size);
+          }
+        }
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 export async function rebuildIndex(clearCache = false): Promise<void> {
   if (clearCache) {
     await clearCacheFile();
@@ -79,19 +104,7 @@ export async function rebuildIndex(clearCache = false): Promise<void> {
   index.clear();
 
   const files = await findJavaFiles();
-
-  await Promise.all(
-    files.map(async (uri) => {
-      const stat = await getFileStat(uri);
-      const content = await readFileContent(uri);
-      if (content) {
-        index.indexFile(uri, content);
-        if (stat) {
-          updateFileFingerprint(uri, stat.mtimeMs, stat.size);
-        }
-      }
-    })
-  );
+  await indexFilesInBatches(files);
 
   await saveCacheNow(javaGlob);
   notifyIndexUpdated();
@@ -129,20 +142,38 @@ async function deltaScan(): Promise<void> {
 }
 
 async function initializeIndex(): Promise<void> {
-  javaGlob = getJavaGlob();
-  const cache = await loadCache(javaGlob);
-
-  if (cache) {
-    hydrateIndexFromCache(cache);
-    notifyIndexUpdated();
-    await deltaScan();
+  if (indexInitialized || indexInitializing) {
     return;
   }
 
-  await rebuildIndex(false);
+  indexInitializing = true;
+  javaGlob = getJavaGlob();
+
+  try {
+    const cache = await loadCache(javaGlob);
+
+    if (cache) {
+      hydrateIndexFromCache(cache);
+      notifyIndexUpdated();
+      await deltaScan();
+    } else {
+      await rebuildIndex(false);
+    }
+
+    indexInitialized = true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Execute SQL: index initialization failed: ${message}`);
+  } finally {
+    indexInitializing = false;
+  }
 }
 
 function scheduleIncrementalUpdate(uri: vscode.Uri): void {
+  if (!indexInitialized) {
+    return;
+  }
+
   if (debounceTimer) {
     clearTimeout(debounceTimer);
   }
@@ -152,16 +183,34 @@ function scheduleIncrementalUpdate(uri: vscode.Uri): void {
 }
 
 function handleFileDelete(uri: vscode.Uri): void {
+  if (!indexInitialized) {
+    return;
+  }
+
   getEntityIndex().removeFile(uri);
   scheduleSaveCache(javaGlob);
   notifyIndexUpdated();
 }
 
+export function scheduleIndexInitialization(): void {
+  setTimeout(() => {
+    void initializeIndex();
+  }, STARTUP_DELAY_MS);
+}
+
 export function startWorkspaceScanner(context: vscode.ExtensionContext): void {
   initIndexCache(context);
-  void initializeIndex();
+  scheduleIndexInitialization();
 
-  watcher = vscode.workspace.createFileSystemWatcher('**/*.java');
+  const watchGlob = getJavaGlob();
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    return;
+  }
+
+  watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(workspaceFolder, watchGlob)
+  );
   watcher.onDidCreate((uri) => scheduleIncrementalUpdate(uri), null, context.subscriptions);
   watcher.onDidChange((uri) => scheduleIncrementalUpdate(uri), null, context.subscriptions);
   watcher.onDidDelete((uri) => handleFileDelete(uri), null, context.subscriptions);
@@ -171,14 +220,6 @@ export function startWorkspaceScanner(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId === 'java') {
         scheduleIncrementalUpdate(doc.uri);
-      }
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === 'java') {
-        scheduleIncrementalUpdate(event.document.uri);
       }
     })
   );
@@ -192,4 +233,6 @@ export function disposeWorkspaceScanner(): void {
   watcher?.dispose();
   watcher = undefined;
   disposeIndexCache();
+  indexInitialized = false;
+  indexInitializing = false;
 }

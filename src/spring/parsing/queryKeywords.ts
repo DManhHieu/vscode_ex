@@ -1,8 +1,8 @@
 export const JPQL_KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
   'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
-  'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'FETCH', 'SET',
-  'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'FETCH', 'SET', 'UPDATE', 'DELETE',
+  'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'TRUE', 'FALSE',
 ];
 
 export const SQL_KEYWORDS = [

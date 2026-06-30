@@ -111,9 +111,14 @@ async function resolveSpringDataMethodProperty(
         continue;
       }
 
-      const fieldPos = await findFieldLineInEntity(entity, propName);
+      const declaring = getEntityIndex().findDeclaringField(entity, propName);
+      if (!declaring) {
+        continue;
+      }
+
+      const fieldPos = await findFieldLineInEntity(declaring.entity, declaring.field.name);
       if (fieldPos) {
-        return new vscode.Location(entity.fileUri, fieldPos);
+        return new vscode.Location(declaring.entity.fileUri, fieldPos);
       }
     }
   }

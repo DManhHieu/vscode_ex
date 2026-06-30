@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getConfigBindingIndex } from './configBindingIndex';
 import { CachedFileEntry, getEntityIndex } from './entityIndex';
 
 function hashWorkspaceRoot(root: string): string {
@@ -9,7 +10,7 @@ function hashWorkspaceRoot(root: string): string {
   return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
-export const CACHE_VERSION = 1;
+export const CACHE_VERSION = 2;
 const CACHE_FILENAME = 'spring-jpa-index.json';
 const SAVE_DEBOUNCE_MS = 2000;
 const HYDRATE_YIELD_EVERY = 200;
@@ -94,11 +95,16 @@ export async function loadCache(javaGlob: string): Promise<IndexCacheData | unde
 
 export async function hydrateIndexFromCache(cache: IndexCacheData): Promise<void> {
   const index = getEntityIndex();
+  const bindingIndex = getConfigBindingIndex();
   index.clear();
+  bindingIndex.clear();
   const entries = Object.entries(cache.files);
   for (let i = 0; i < entries.length; i++) {
     const [uriStr, entry] = entries[i];
     index.hydrateFileFromCache(uriStr, entry);
+    if (entry.configBindings?.length) {
+      bindingIndex.hydrateFileFromCache(uriStr, entry.configBindings);
+    }
     if (i > 0 && i % HYDRATE_YIELD_EVERY === 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
@@ -116,11 +122,20 @@ export async function saveCacheNow(javaGlob: string): Promise<void> {
   }
 
   const index = getEntityIndex();
+  const bindingIndex = getConfigBindingIndex();
+  const configBindingsByFile = new Map<string, ReturnType<typeof bindingIndex.serializeFileBindings>>();
+  for (const uriStr of new Set([
+    ...index.getIndexedFileUris(),
+    ...bindingIndex.getIndexedFileUris(),
+  ])) {
+    configBindingsByFile.set(uriStr, bindingIndex.serializeFileBindings(vscode.Uri.parse(uriStr)));
+  }
+
   const data: IndexCacheData = {
     version: CACHE_VERSION,
     javaGlob,
     workspaceRoot: getWorkspaceRoot(),
-    files: index.serializeToCache(fileFingerprints),
+    files: index.serializeToCache(fileFingerprints, configBindingsByFile),
   };
 
   await vscode.workspace.fs.writeFile(cacheUri, Buffer.from(JSON.stringify(data), 'utf8'));

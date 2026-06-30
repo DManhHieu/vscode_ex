@@ -6,6 +6,8 @@ import {
   parseEntityFromSource,
   parseRepositoriesFromSource,
 } from '../parsing/javaAnnotations';
+import { extractSimpleType } from '../parsing/springDataParser';
+import { CachedConfigBinding } from './configBindingIndex';
 
 export interface EntityMetadata {
   className: string;
@@ -14,6 +16,7 @@ export interface EntityMetadata {
   fields: EntityField[];
   fileUri: vscode.Uri;
   classStartLine: number;
+  superClassName?: string;
 }
 
 export interface RepositoryMetadata {
@@ -31,6 +34,7 @@ export interface CachedEntity {
   tableName: string;
   fields: EntityField[];
   classStartLine: number;
+  superClassName?: string;
 }
 
 export interface CachedRepository {
@@ -46,6 +50,7 @@ export interface CachedFileEntry {
   size: number;
   entity?: CachedEntity;
   repositories?: CachedRepository[];
+  configBindings?: CachedConfigBinding[];
 }
 
 export class EntityIndex {
@@ -123,9 +128,16 @@ export class EntityIndex {
     }
   }
 
-  serializeToCache(fingerprints: Map<string, { mtimeMs: number; size: number }>): Record<string, CachedFileEntry> {
+  serializeToCache(
+    fingerprints: Map<string, { mtimeMs: number; size: number }>,
+    configBindingsByFile?: Map<string, CachedConfigBinding[] | undefined>
+  ): Record<string, CachedFileEntry> {
     const result: Record<string, CachedFileEntry> = {};
-    const allKeys = new Set([...this.fileEntityMap.keys(), ...this.fileRepoMap.keys()]);
+    const allKeys = new Set([
+      ...this.fileEntityMap.keys(),
+      ...this.fileRepoMap.keys(),
+      ...(configBindingsByFile ? [...configBindingsByFile.keys()] : []),
+    ]);
 
     for (const key of allKeys) {
       const fp = fingerprints.get(key);
@@ -150,7 +162,12 @@ export class EntityIndex {
         entry.repositories = repos.map(({ fileUri: _, ...r }) => r);
       }
 
-      if (entry.entity || entry.repositories) {
+      const configBindings = configBindingsByFile?.get(key);
+      if (configBindings?.length) {
+        entry.configBindings = configBindings;
+      }
+
+      if (entry.entity || entry.repositories || entry.configBindings) {
         result[key] = entry;
       }
     }
@@ -217,7 +234,93 @@ export class EntityIndex {
 
   getFieldNames(entityName: string): string[] {
     const entity = this.getEntityByName(entityName);
-    return entity?.fields.map((f) => f.name) ?? [];
+    return entity ? this.getEffectiveFields(entity).map((f) => f.name) : [];
+  }
+
+  getParentEntity(entity: EntityMetadata): EntityMetadata | undefined {
+    if (!entity.superClassName) {
+      return undefined;
+    }
+    return this.getEntityByName(entity.superClassName);
+  }
+
+  getEffectiveFields(entity: EntityMetadata, visited = new Set<string>()): EntityField[] {
+    const key = entity.className.toLowerCase();
+    if (visited.has(key)) {
+      return [];
+    }
+    visited.add(key);
+
+    const fieldsMap = new Map<string, EntityField>();
+
+    const parent = this.getParentEntity(entity);
+    if (parent) {
+      for (const field of this.getEffectiveFields(parent, visited)) {
+        fieldsMap.set(field.name.toLowerCase(), field);
+      }
+    }
+
+    for (const field of entity.fields) {
+      fieldsMap.set(field.name.toLowerCase(), field);
+    }
+
+    return [...fieldsMap.values()];
+  }
+
+  findDeclaringField(
+    entity: EntityMetadata,
+    fieldName: string,
+    visited = new Set<string>()
+  ): { entity: EntityMetadata; field: EntityField } | undefined {
+    const key = entity.className.toLowerCase();
+    if (visited.has(key)) {
+      return undefined;
+    }
+    visited.add(key);
+
+    const lower = fieldName.toLowerCase();
+    const local = entity.fields.find(
+      (f) => f.name.toLowerCase() === lower || f.columnName.toLowerCase() === lower
+    );
+    if (local) {
+      return { entity, field: local };
+    }
+
+    const parent = this.getParentEntity(entity);
+    if (parent) {
+      return this.findDeclaringField(parent, fieldName, visited);
+    }
+
+    return undefined;
+  }
+
+  findDeclaringFieldPath(
+    entity: EntityMetadata,
+    path: string[],
+    visited = new Set<string>()
+  ): { entity: EntityMetadata; field: EntityField } | undefined {
+    if (path.length === 0) {
+      return undefined;
+    }
+    if (path.length === 1) {
+      return this.findDeclaringField(entity, path[0], visited);
+    }
+
+    const [head, ...rest] = path;
+    const lower = head.toLowerCase();
+    const field = this.getEffectiveFields(entity, new Set(visited)).find(
+      (f) => f.name.toLowerCase() === lower
+    );
+    if (!field) {
+      return undefined;
+    }
+
+    const related = this.getEntityByName(extractSimpleType(field.type));
+    if (!related) {
+      return undefined;
+    }
+
+    return this.findDeclaringFieldPath(related, rest, visited);
   }
 }
 

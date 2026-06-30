@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { getConfigBindingIndex } from './configBindingIndex';
 import { getEntityIndex } from './entityIndex';
 import {
   clearCacheFile,
@@ -62,6 +63,7 @@ export async function indexJavaFile(uri: vscode.Uri, saveToCache = true): Promis
 
   if (content === undefined) {
     getEntityIndex().removeFile(uri);
+    getConfigBindingIndex().removeFile(uri);
     if (saveToCache) {
       scheduleSaveCache(javaGlob);
     }
@@ -69,6 +71,7 @@ export async function indexJavaFile(uri: vscode.Uri, saveToCache = true): Promis
   }
 
   getEntityIndex().indexFile(uri, content);
+  getConfigBindingIndex().indexFile(uri, content);
 
   if (stat) {
     updateFileFingerprint(uri, stat.mtimeMs, stat.size);
@@ -89,6 +92,7 @@ function yieldToEventLoop(): Promise<void> {
 
 async function indexFilesInBatches(files: vscode.Uri[], report?: ProgressReporter): Promise<void> {
   const index = getEntityIndex();
+  const bindingIndex = getConfigBindingIndex();
 
   for (let i = 0; i < files.length; i += INDEX_BATCH_SIZE) {
     const batch = files.slice(i, i + INDEX_BATCH_SIZE);
@@ -104,6 +108,7 @@ async function indexFilesInBatches(files: vscode.Uri[], report?: ProgressReporte
         const content = await readFileContent(uri);
         if (content) {
           index.indexFile(uri, content);
+          bindingIndex.indexFile(uri, content);
           if (stat) {
             updateFileFingerprint(uri, stat.mtimeMs, stat.size);
           }
@@ -159,7 +164,9 @@ export async function rebuildIndex(
     }
 
     const index = getEntityIndex();
+    const bindingIndex = getConfigBindingIndex();
     index.clear();
+    bindingIndex.clear();
 
     report('Finding Java source files...');
     const files = await findJavaFiles();
@@ -193,14 +200,17 @@ export async function rebuildIndex(
 
 async function deltaScan(report?: ProgressReporter): Promise<boolean> {
   const index = getEntityIndex();
+  const bindingIndex = getConfigBindingIndex();
   report?.('Checking for changed Java files...');
   const files = await findJavaFiles();
   const currentPaths = new Set(files.map((f) => f.toString()));
   let changed = false;
 
-  for (const indexedUri of index.getIndexedFileUris()) {
+  const indexedUris = new Set([...index.getIndexedFileUris(), ...bindingIndex.getIndexedFileUris()]);
+  for (const indexedUri of indexedUris) {
     if (!currentPaths.has(indexedUri)) {
       index.removeFile(vscode.Uri.parse(indexedUri));
+      bindingIndex.removeFile(vscode.Uri.parse(indexedUri));
       changed = true;
     }
   }
@@ -293,6 +303,7 @@ function handleFileDelete(uri: vscode.Uri): void {
   }
 
   getEntityIndex().removeFile(uri);
+  getConfigBindingIndex().removeFile(uri);
   scheduleSaveCache(javaGlob);
   notifyIndexUpdated();
 }

@@ -18,6 +18,8 @@
   "extensionDependencies": [],
   "activationEvents": [
     "onLanguage:java",
+    "onLanguage:properties",
+    "onLanguage:yaml",
     "onCommand:excuteSql.runMultiple",
     "onCommand:excuteSql.runSpringQuery",
     "onCommand:excuteSql.copySpringQuery",

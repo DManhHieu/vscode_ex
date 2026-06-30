@@ -35,10 +35,10 @@ export class RepositoryDiagnosticProvider {
         continue;
       }
 
-      const fields = entity.fields.map((f) => ({ name: f.name, type: f.type }));
+      const fields = index.getEffectiveFields(entity).map((f) => ({ name: f.name, type: f.type }));
       const resolveEntity = (typeName: string) => {
         const related = index.getEntityByName(typeName);
-        return related?.fields.map((f) => ({ name: f.name, type: f.type }));
+        return related ? index.getEffectiveFields(related).map((f) => ({ name: f.name, type: f.type })) : undefined;
       };
 
       for (const method of repo.methods) {

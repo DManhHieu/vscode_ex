@@ -1,0 +1,7 @@
+app:
+  mail:
+    host: localhost
+    port: 587
+    smtp:
+      host: smtp.example.com
+      auth: true

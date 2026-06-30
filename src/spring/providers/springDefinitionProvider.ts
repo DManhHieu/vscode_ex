@@ -9,45 +9,69 @@ function getWordAtPosition(document: vscode.TextDocument, position: vscode.Posit
   return range ? document.getText(range) : undefined;
 }
 
-function getAliasFieldAtPosition(
+function getPropertyPathAtPosition(
   document: vscode.TextDocument,
   position: vscode.Position
-): { alias: string; field: string } | undefined {
+): { root: string; path: string[] } | undefined {
   const line = document.lineAt(position.line).text;
-  const before = line.substring(0, position.character);
-  const match = before.match(/(\w+)\.(\w*)$/);
-  if (!match) {
+  const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][\w]*/);
+  if (!wordRange) {
     return undefined;
   }
-  return { alias: match[1], field: match[2] || getWordAtPosition(document, position) || '' };
+
+  const word = document.getText(wordRange);
+  const before = line.substring(0, wordRange.start.character);
+  const nestedMatch = before.match(/(\w+(?:\.\w+)*)\.$/);
+  if (nestedMatch) {
+    const segments = nestedMatch[1].split('.');
+    return { root: segments[0], path: [...segments.slice(1), word] };
+  }
+
+  const singleMatch = before.match(/(\w+)\.$/);
+  if (singleMatch) {
+    return { root: singleMatch[1], path: [word] };
+  }
+
+  return undefined;
 }
 
 async function resolveEntityLocation(entity: EntityMetadata): Promise<vscode.Location> {
   return new vscode.Location(entity.fileUri, new vscode.Position(entity.classStartLine, 0));
 }
 
-async function resolveFieldFromAlias(
+async function resolveFieldLocation(
+  declaring: { entity: EntityMetadata; field: { name: string } }
+): Promise<vscode.Location | undefined> {
+  const fieldPos = await findFieldLineInEntity(declaring.entity, declaring.field.name);
+  if (!fieldPos) {
+    return undefined;
+  }
+  return new vscode.Location(declaring.entity.fileUri, fieldPos);
+}
+
+async function resolveFieldFromPath(
   sql: string,
-  alias: string,
-  fieldName: string
+  root: string,
+  path: string[]
 ): Promise<vscode.Location | undefined> {
   const aliases = parseJpqlAliases(sql);
-  const entityName = aliases.get(alias.toLowerCase());
-  if (!entityName || !fieldName) {
+  const entityName = aliases.get(root.toLowerCase());
+  if (!entityName || path.length === 0) {
     return undefined;
   }
 
-  const entity = getEntityIndex().getEntityByName(entityName);
+  const index = getEntityIndex();
+  const entity = index.getEntityByName(entityName);
   if (!entity) {
     return undefined;
   }
 
-  const fieldPos = await findFieldLineInEntity(entity, fieldName);
-  if (!fieldPos) {
+  const declaring = index.findDeclaringFieldPath(entity, path);
+  if (!declaring) {
     return undefined;
   }
 
-  return new vscode.Location(entity.fileUri, fieldPos);
+  return resolveFieldLocation(declaring);
 }
 
 export class SpringDefinitionProvider implements vscode.DefinitionProvider {
@@ -88,10 +112,10 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
     const query = isInsideQueryString(content, offset);
     if (query) {
       const word = getWordAtPosition(document, position);
-      const aliasField = getAliasFieldAtPosition(document, position);
+      const propertyPath = getPropertyPathAtPosition(document, position);
 
-      if (aliasField && aliasField.field) {
-        const fieldLoc = await resolveFieldFromAlias(query.sql, aliasField.alias, aliasField.field);
+      if (propertyPath && propertyPath.path.length > 0) {
+        const fieldLoc = await resolveFieldFromPath(query.sql, propertyPath.root, propertyPath.path);
         if (fieldLoc) {
           return fieldLoc;
         }
@@ -104,34 +128,35 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
             return resolveEntityLocation(entity);
           }
         } else {
-          const entity = index.getEntityByName(word);
-          if (entity) {
-            return resolveEntityLocation(entity);
+          const aliases = parseJpqlAliases(query.sql);
+
+          const entityFromAlias = aliases.get(word.toLowerCase());
+          if (entityFromAlias) {
+            const ent = index.getEntityByName(entityFromAlias);
+            if (ent) {
+              return resolveEntityLocation(ent);
+            }
           }
 
-          const aliases = parseJpqlAliases(query.sql);
-          const entityName = aliases.get(word.toLowerCase());
-          if (entityName) {
-            const byAlias = index.getEntityByName(entityName);
-            if (byAlias) {
-              return resolveEntityLocation(byAlias);
-            }
+          const entityByName = index.getEntityByName(word);
+          if (entityByName) {
+            return resolveEntityLocation(entityByName);
           }
 
           for (const [, entityNameFromAlias] of aliases) {
             const ent = index.getEntityByName(entityNameFromAlias);
-            const field = ent?.fields.find(
-              (f) => f.name === word || f.columnName === word
-            );
-            if (ent && field) {
-              const fieldPos = await findFieldLineInEntity(ent, field.name);
-              if (fieldPos) {
-                return new vscode.Location(ent.fileUri, fieldPos);
+            const declaring = ent ? index.findDeclaringField(ent, word) : undefined;
+            if (declaring) {
+              const fieldLoc = await resolveFieldLocation(declaring);
+              if (fieldLoc) {
+                return fieldLoc;
               }
             }
           }
         }
       }
+
+      return undefined;
     }
 
     const entityInFile = index.getAllEntities().find((e) => e.fileUri.toString() === document.uri.toString());
@@ -139,11 +164,11 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
       const wordRange = document.getWordRangeAtPosition(position, /\w+/);
       if (wordRange) {
         const word = document.getText(wordRange);
-        const field = entityInFile.fields.find((f) => f.name === word || f.columnName === word);
-        if (field) {
-          const fieldPos = await findFieldLineInEntity(entityInFile, field.name);
-          if (fieldPos) {
-            return new vscode.Location(document.uri, fieldPos);
+        const declaring = index.findDeclaringField(entityInFile, word);
+        if (declaring) {
+          const fieldLoc = await resolveFieldLocation(declaring);
+          if (fieldLoc) {
+            return fieldLoc;
           }
         }
       }

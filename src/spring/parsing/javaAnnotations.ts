@@ -10,6 +10,7 @@ export interface ParsedEntity {
   tableName: string;
   fields: EntityField[];
   classStartLine: number;
+  superClassName?: string;
 }
 
 export interface ParsedQuery {
@@ -42,22 +43,28 @@ export function extractAnnotationValue(text: string, annotation: string, attr?: 
 }
 
 export function parseEntityFromSource(content: string, filePath: string): ParsedEntity | undefined {
-  if (!/@Entity\b/.test(content)) {
+  const isEntity = /@Entity\b/.test(content);
+  const isMappedSuperclass = /@MappedSuperclass\b/.test(content);
+  const isEmbeddable = /@Embeddable\b/.test(content);
+  if (!isEntity && !isMappedSuperclass && !isEmbeddable) {
     return undefined;
   }
 
-  const classMatch = content.match(/(?:public\s+|abstract\s+)*class\s+(\w+)/);
+  const classMatch = content.match(/(?:public\s+|abstract\s+)*class\s+(\w+)(?:\s+extends\s+([\w.]+))?/);
   if (!classMatch) {
     return undefined;
   }
 
   const className = classMatch[1];
+  const superClassRef = classMatch[2];
+  const superClassName = superClassRef ? superClassRef.split('.').pop() : undefined;
   const entityName = extractAnnotationValue(content, 'Entity', 'name') ?? className;
   const tableName = extractAnnotationValue(content, 'Table', 'name') ?? camelToSnake(className);
   const classStartLine = content.substring(0, classMatch.index ?? 0).split('\n').length - 1;
 
   const fields: EntityField[] = [];
-  const fieldRegex = /(?:(@[\w.]+(?:\([^)]*\))?\s*)*)(?:private|protected)\s+([\w.<>,\s\[\]]+?)\s+(\w+)\s*;/g;
+  const fieldRegex =
+    /(?:(@[\w.]+(?:\([^)]*\))?\s*)*)(?:private|protected)\s+([\w.<>,\s\[\]]+?)\s+(\w+)\s*(?:=\s*[^;]+)?\s*;/g;
   let fieldMatch: RegExpExecArray | null;
 
   while ((fieldMatch = fieldRegex.exec(content)) !== null) {
@@ -74,7 +81,7 @@ export function parseEntityFromSource(content: string, filePath: string): Parsed
     fields.push({ name: fieldName, columnName, type: fieldType });
   }
 
-  return { className, entityName, tableName, fields, classStartLine };
+  return { className, entityName, tableName, fields, classStartLine, superClassName };
 }
 
 export function parseRepositoriesFromSource(content: string): ParsedRepository[] {

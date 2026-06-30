@@ -156,7 +156,7 @@ function splitByKeywords(remainder: string): string[] {
   return segments;
 }
 
-function extractSimpleType(type: string): string {
+export function extractSimpleType(type: string): string {
   const withoutGenerics = type.replace(/<[^>]*>/g, '').trim();
   const parts = withoutGenerics.split('.');
   return parts[parts.length - 1] ?? withoutGenerics;

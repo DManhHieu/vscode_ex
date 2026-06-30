@@ -40,7 +40,7 @@ export class QueryCompletionProvider implements vscode.CompletionItemProvider {
         if (!prefix || entity.tableName.toLowerCase().startsWith(prefix.toLowerCase())) {
           items.push(new vscode.CompletionItem(entity.tableName, vscode.CompletionItemKind.Class));
         }
-        for (const field of entity.fields) {
+        for (const field of index.getEffectiveFields(entity)) {
           if (!prefix || field.columnName.toLowerCase().startsWith(prefix.toLowerCase())) {
             const item = new vscode.CompletionItem(field.columnName, vscode.CompletionItemKind.Field);
             item.detail = `${entity.tableName}.${field.name}`;
@@ -60,7 +60,7 @@ export class QueryCompletionProvider implements vscode.CompletionItemProvider {
             entity.entityName.toLowerCase().startsWith(prefix.toLowerCase())) {
           items.push(new vscode.CompletionItem(entity.className, vscode.CompletionItemKind.Class));
         }
-        for (const field of entity.fields) {
+        for (const field of index.getEffectiveFields(entity)) {
           const fieldRef = `${entity.className.toLowerCase().charAt(0)}.${field.name}`;
           if (!prefix || field.name.toLowerCase().startsWith(prefix.toLowerCase()) ||
               fieldRef.toLowerCase().startsWith(prefix.toLowerCase())) {

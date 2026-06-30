@@ -35,22 +35,35 @@ export class RepositoryDiagnosticProvider {
         continue;
       }
 
-      const fieldNames = entity.fields.map((f) => f.name);
+      const fields = entity.fields.map((f) => ({ name: f.name, type: f.type }));
+      const resolveEntity = (typeName: string) => {
+        const related = index.getEntityByName(typeName);
+        return related?.fields.map((f) => ({ name: f.name, type: f.type }));
+      };
 
       for (const method of repo.methods) {
-        const errors = validateMethodAgainstEntity(method.name, fieldNames);
+        const errors = validateMethodAgainstEntity(method.name, fields, resolveEntity);
         for (const error of errors) {
-          const propMatch = error.match(/Unknown property '(\w+)'/);
-          const propName = propMatch?.[1];
           const lineText = document.lineAt(method.line).text;
-          const nameIndex = propName ? lineText.indexOf(propName) : lineText.indexOf(method.name);
-          const startCol = nameIndex >= 0 ? nameIndex : method.column;
-          const endCol = startCol + (propName?.length ?? method.name.length);
+          const methodNameIndex = lineText.indexOf(method.name);
+          let startCol = method.column;
+          let endCol = startCol + method.name.length;
+
+          if (methodNameIndex >= 0) {
+            const segmentIndex = method.name.indexOf(error.segment);
+            if (segmentIndex >= 0) {
+              startCol = methodNameIndex + segmentIndex;
+              endCol = startCol + error.segment.length;
+            } else {
+              startCol = methodNameIndex;
+              endCol = startCol + method.name.length;
+            }
+          }
 
           const range = new vscode.Range(method.line, startCol, method.line, endCol);
           const diagnostic = new vscode.Diagnostic(
             range,
-            error,
+            error.message,
             vscode.DiagnosticSeverity.Warning
           );
           diagnostic.source = DIAGNOSTIC_SOURCE;

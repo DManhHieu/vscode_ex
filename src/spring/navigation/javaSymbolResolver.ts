@@ -102,7 +102,7 @@ async function resolveSpringDataMethodProperty(
       }
 
       const parsed = parseSpringDataMethodName(method.name);
-      if (!parsed?.properties.includes(propName)) {
+      if (!parsed?.properties.some((property) => property.name === propName)) {
         continue;
       }
 

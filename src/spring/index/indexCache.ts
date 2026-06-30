@@ -10,7 +10,7 @@ function hashWorkspaceRoot(root: string): string {
   return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
-export const CACHE_VERSION = 3;
+export const CACHE_VERSION = 4;
 const CACHE_FILENAME = 'spring-jpa-index.json';
 const SAVE_DEBOUNCE_MS = 2000;
 const HYDRATE_YIELD_EVERY = 200;

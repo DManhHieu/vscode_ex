@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { parseQueriesFromSource } from '../parsing/javaAnnotations';
+import { parseQueriesFromSource, ParsedQuery, getQueryAnnotationBodyAtLine, extractQuerySql } from '../parsing/javaAnnotations';
+import { buildConstantResolver } from '../parsing/queryConstantResolver';
 import { translateJpqlToSql, JpqlTranslationError } from '../parsing/jpqlToSql';
 import { SqlDialect } from '../parsing/jpqlFunctions';
 import { getEntityIndex } from '../index/entityIndex';
@@ -9,6 +10,15 @@ import { promptQueryParameters, substituteQueryParameters } from '../queryParams
 import { log, runQueryString } from '../../runner';
 
 const codeLensCache = new Map<string, vscode.CodeLens[]>();
+
+function safeParseQueries(content: string): ParsedQuery[] {
+  try {
+    const resolver = buildConstantResolver(content, getEntityIndex());
+    return parseQueriesFromSource(content, resolver);
+  } catch {
+    return parseQueriesFromSource(content);
+  }
+}
 
 function getCodeLensCacheKey(document: vscode.TextDocument): string {
   return `${document.uri.toString()}#${document.version}`;
@@ -33,7 +43,7 @@ function isTranslationError(result: ReturnType<typeof translateJpqlToSql>): resu
 }
 
 async function resolveSqlForQuery(
-  query: ReturnType<typeof parseQueriesFromSource>[number],
+  query: ParsedQuery,
   workspaceFolder?: vscode.WorkspaceFolder
 ): Promise<string | undefined> {
   if (query.nativeQuery) {
@@ -64,48 +74,53 @@ export class RunQueryCodeLensProvider implements vscode.CodeLensProvider {
       return [];
     }
 
-    const cacheKey = getCodeLensCacheKey(document);
-    const cached = codeLensCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    const content = document.getText();
-    const queries = parseQueriesFromSource(content);
-    const lenses: vscode.CodeLens[] = [];
-
-    for (const query of queries) {
-      const range = new vscode.Range(query.startLine, 0, query.startLine, 0);
-      lenses.push(
-        new vscode.CodeLens(range, {
-          title: query.nativeQuery ? '▶ Run Query (native SQL)' : '▶ Run Query (JPQL → SQL)',
-          command: 'excuteSql.runSpringQuery',
-          arguments: [document.uri, query.startLine],
-        }),
-        new vscode.CodeLens(range, {
-          title: 'Copy SQL',
-          command: 'excuteSql.copySpringQuery',
-          arguments: [document.uri, query.startLine],
-        })
-      );
-    }
-
-    codeLensCache.set(cacheKey, lenses);
-    if (codeLensCache.size > 50) {
-      const oldest = codeLensCache.keys().next().value;
-      if (oldest) {
-        codeLensCache.delete(oldest);
+    try {
+      const cacheKey = getCodeLensCacheKey(document);
+      const cached = codeLensCache.get(cacheKey);
+      if (cached) {
+        return cached;
       }
-    }
 
-    return lenses;
+      const content = document.getText();
+      const queries = safeParseQueries(content);
+      const lenses: vscode.CodeLens[] = [];
+
+      for (const query of queries) {
+        const range = new vscode.Range(query.startLine, 0, query.startLine, 0);
+        lenses.push(
+          new vscode.CodeLens(range, {
+            title: query.nativeQuery ? '▶ Run Query (native SQL)' : '▶ Run Query (JPQL → SQL)',
+            command: 'excuteSql.runSpringQuery',
+            arguments: [document.uri, query.startLine],
+          }),
+          new vscode.CodeLens(range, {
+            title: 'Copy SQL',
+            command: 'excuteSql.copySpringQuery',
+            arguments: [document.uri, query.startLine],
+          })
+        );
+      }
+
+      codeLensCache.set(cacheKey, lenses);
+      if (codeLensCache.size > 50) {
+        const oldest = codeLensCache.keys().next().value;
+        if (oldest) {
+          codeLensCache.delete(oldest);
+        }
+      }
+
+      return lenses;
+    } catch {
+      return [];
+    }
   }
 }
 
 export async function copySpringQueryAtLine(uri: vscode.Uri, line: number): Promise<void> {
   const document = await vscode.workspace.openTextDocument(uri);
   const content = document.getText();
-  const queries = parseQueriesFromSource(content);
+  const resolver = buildConstantResolver(content, getEntityIndex());
+  const queries = parseQueriesFromSource(content, resolver);
   const query = queries.find((q) => q.startLine === line);
 
   if (!query) {
@@ -113,18 +128,31 @@ export async function copySpringQueryAtLine(uri: vscode.Uri, line: number): Prom
     return;
   }
 
+  const annotationBody = getQueryAnnotationBodyAtLine(content, line);
+  const resolvedSql = annotationBody ? extractQuerySql(annotationBody, resolver) : query.sql;
+  const queryForResolve = resolvedSql ? { ...query, sql: resolvedSql } : query;
+
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
-  const sql = await resolveSqlForQuery(query, workspaceFolder);
+  const sql = await resolveSqlForQuery(queryForResolve, workspaceFolder);
 
   if (!sql) {
     if (!query.nativeQuery) {
-      await vscode.env.clipboard.writeText(query.sql);
+      await vscode.env.clipboard.writeText(resolvedSql || query.sql);
       vscode.window.showInformationMessage('Translation failed; raw JPQL copied to clipboard.');
     }
     return;
   }
 
   await vscode.env.clipboard.writeText(sql);
+
+  const skipped = resolver.skippedConstants ?? [];
+  if (skipped.length > 0) {
+    const uniqueSkipped = [...new Set(skipped)];
+    vscode.window.showInformationMessage(
+      `SQL copied; unresolved constant(s): ${uniqueSkipped.join(', ')}`
+    );
+    return;
+  }
   vscode.window.showInformationMessage(
     query.nativeQuery ? 'SQL copied to clipboard.' : 'Translated SQL copied to clipboard.'
   );
@@ -133,7 +161,7 @@ export async function copySpringQueryAtLine(uri: vscode.Uri, line: number): Prom
 export async function runSpringQueryAtLine(uri: vscode.Uri, line: number): Promise<void> {
   const document = await vscode.workspace.openTextDocument(uri);
   const content = document.getText();
-  const queries = parseQueriesFromSource(content);
+  const queries = safeParseQueries(content);
   const query = queries.find((q) => q.startLine === line);
 
   if (!query) {

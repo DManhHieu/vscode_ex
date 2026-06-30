@@ -265,6 +265,14 @@ export function unescapeJavaString(value: string): string {
     .replace(/\\\\/g, '\\');
 }
 
+/** Collapse incidental whitespace in a SQL fragment (e.g. Java text blocks). */
+function normalizeConcatSegment(segment: string): string {
+  if (!/[\r\n]/.test(segment)) {
+    return segment;
+  }
+  return segment.replace(/\s+/g, ' ').trim();
+}
+
 function joinSqlSegments(segments: string[]): string {
   if (segments.length === 0) {
     return '';
@@ -273,12 +281,19 @@ function joinSqlSegments(segments: string[]): string {
     return segments[0].trim();
   }
 
-  const hasMultiline = segments.some((s) => s.includes('\n'));
-  if (hasMultiline) {
-    return segments.map((s) => s.trim()).join('\n').trim();
-  }
-
-  return segments.map((s) => s.trim()).join(' ').trim();
+  return segments
+    .map((s) => normalizeConcatSegment(s.trim()))
+    .filter((s) => s.length > 0)
+    .reduce((acc, seg) => {
+      if (!acc) {
+        return seg;
+      }
+      if (/[(\[,]$/.test(acc) || /^[)\],;.]/.test(seg)) {
+        return acc + seg;
+      }
+      return `${acc} ${seg}`;
+    }, '')
+    .trim();
 }
 
 export interface QueryLiteralSegment {
@@ -348,6 +363,92 @@ function skipBalanced(section: string, start: number, open: string, close: strin
   return pos;
 }
 
+/** Find index after the closing `)` of an annotation, ignoring parens inside string literals. */
+function findAnnotationCloseParen(content: string, parenStart: number): number {
+  let depth = 1;
+  let i = parenStart + 1;
+
+  while (i < content.length && depth > 0) {
+    const c = content[i];
+    if (c === '"' || c === "'") {
+      const quote = c;
+      i++;
+      while (i < content.length) {
+        if (content[i] === '\\' && i + 1 < content.length) {
+          i += 2;
+          continue;
+        }
+        if (content[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (content.startsWith('"""', i)) {
+      i += 3;
+      const end = content.indexOf('"""', i);
+      if (end < 0) {
+        return content.length;
+      }
+      i = end + 3;
+      continue;
+    }
+    if (c === '(') {
+      depth++;
+    } else if (c === ')') {
+      depth--;
+    }
+    i++;
+  }
+
+  return i;
+}
+
+function getQueryAnnotationBody(content: string, queryMatchIndex: number): string | undefined {
+  const parenStart = content.indexOf('(', queryMatchIndex);
+  if (parenStart < 0) {
+    return undefined;
+  }
+  const closeIndex = findAnnotationCloseParen(content, parenStart);
+  return content.substring(parenStart + 1, closeIndex - 1);
+}
+
+export function getQueryAnnotationBodyAtLine(content: string, line: number): string | undefined {
+  const queryRegex = /@Query\s*\(/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = queryRegex.exec(content)) !== null) {
+    const startLine = content.substring(0, match.index).split('\n').length - 1;
+    if (startLine !== line) {
+      continue;
+    }
+    return getQueryAnnotationBody(content, match.index);
+  }
+
+  return undefined;
+}
+
+export interface JavaConstantResolver {
+  resolve(ref: string): string | undefined;
+  skippedConstants?: string[];
+}
+
+/** Read a Java expression between string concatenation operators. */
+export function readJavaConcatExpression(
+  section: string,
+  index: number
+): { expr: string; end: number } | undefined {
+  const start = index;
+  const end = skipJavaConcatExpression(section, index);
+  const expr = section.substring(start, end).trim();
+  if (!expr || !isJavaConstantReference(expr)) {
+    return undefined;
+  }
+  return { expr, end };
+}
+
 /** Skip a Java expression between string concatenation operators. */
 function skipJavaConcatExpression(section: string, index: number): number {
   let pos = index;
@@ -392,9 +493,42 @@ function skipJavaConcatExpression(section: string, index: number): number {
 
 function findSqlSectionEnd(annotationBody: string, sectionStart: number): number {
   const rest = annotationBody.substring(sectionStart);
-  const match = rest.match(/\b(?:countQuery|nativeQuery|flushAutomatically|readOnly|timeout)\s*=/);
-  if (match && match.index !== undefined && match.index > 0) {
-    return sectionStart + match.index;
+  let i = 0;
+  while (i < rest.length) {
+    const attrMatch = rest.substring(i).match(
+      /^\b(countQuery|nativeQuery|flushAutomatically|readOnly|timeout)\s*=/
+    );
+    if (attrMatch && i > 0) {
+      return sectionStart + i;
+    }
+
+    const c = rest[i];
+    if (c === '"' || c === "'") {
+      const quote = c;
+      i++;
+      while (i < rest.length) {
+        if (rest[i] === '\\' && i + 1 < rest.length) {
+          i += 2;
+          continue;
+        }
+        if (rest[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (rest.startsWith('"""', i)) {
+      i += 3;
+      const end = rest.indexOf('"""', i);
+      if (end < 0) {
+        return annotationBody.length;
+      }
+      i = end + 3;
+      continue;
+    }
+    i++;
   }
   return annotationBody.length;
 }
@@ -537,19 +671,8 @@ export function parseQueryLiteralSegments(content: string): Array<{
       continue;
     }
 
-    let depth = 1;
-    let i = parenStart + 1;
-    while (i < content.length && depth > 0) {
-      const c = content[i];
-      if (c === '(') {
-        depth++;
-      } else if (c === ')') {
-        depth--;
-      }
-      i++;
-    }
-
-    const annotationBody = content.substring(parenStart + 1, i - 1);
+    const closeIndex = findAnnotationCloseParen(content, parenStart);
+    const annotationBody = content.substring(parenStart + 1, closeIndex - 1);
     const nativeQuery = /nativeQuery\s*=\s*true/.test(annotationBody);
     const segments = getQueryLiteralSegmentsFromBody(annotationBody, parenStart + 1);
 
@@ -561,7 +684,245 @@ export function parseQueryLiteralSegments(content: string): Array<{
   return results;
 }
 
-function collectConcatenatedLiterals(section: string): string[] {
+function extractInitializerUntilSemicolon(content: string, start: number): string | undefined {
+  let parenDepth = 0;
+  let i = start;
+
+  while (i < content.length) {
+    const c = content[i];
+    if (c === '"' || c === "'") {
+      const quote = c;
+      i++;
+      while (i < content.length) {
+        if (content[i] === '\\' && i + 1 < content.length) {
+          i += 2;
+          continue;
+        }
+        if (content[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (content.startsWith('"""', i)) {
+      const end = content.indexOf('"""', i + 3);
+      if (end < 0) {
+        return undefined;
+      }
+      i = end + 3;
+      continue;
+    }
+    if (c === '(') {
+      parenDepth++;
+      i++;
+      continue;
+    }
+    if (c === ')') {
+      parenDepth--;
+      i++;
+      continue;
+    }
+    if (c === ';' && parenDepth === 0) {
+      return content.substring(start, i).trim();
+    }
+    i++;
+  }
+
+  return undefined;
+}
+
+function hasStringConcatenation(expr: string): boolean {
+  let i = 0;
+  while (i < expr.length) {
+    if (expr.startsWith('"""', i)) {
+      i += 3;
+      const end = expr.indexOf('"""', i);
+      if (end < 0) {
+        return false;
+      }
+      i = end + 3;
+      continue;
+    }
+    const c = expr[i];
+    if (c === '"' || c === "'") {
+      const quote = c;
+      i++;
+      while (i < expr.length) {
+        if (expr[i] === '\\' && i + 1 < expr.length) {
+          i += 2;
+          continue;
+        }
+        if (expr[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === '+') {
+      return true;
+    }
+    i++;
+  }
+  return false;
+}
+
+function looksLikeUnevaluatedJavaConcat(value: string): boolean {
+  return /["']\s*\+\s*["']/.test(value) || (hasStringConcatenation(value) && /^\s*["']/.test(value));
+}
+
+/** Merge only quoted Java string-literal concatenation (`"a" + "b"`). */
+export function mergeQuotedJavaConcat(value: string): string {
+  let result = value;
+  while (/["']\s*\+\s*["']/.test(result)) {
+    result = result.replace(/"\s*\+\s*"/g, ' ').replace(/'\s*\+\s*'/g, ' ');
+  }
+  return result.replace(/\s+/g, ' ').trim();
+}
+
+/** @deprecated Use mergeQuotedJavaConcat; kept for tests. */
+export function stripJavaConcatArtifacts(sql: string): string {
+  return mergeQuotedJavaConcat(sql);
+}
+
+export function resolveJavaStringExpression(
+  expr: string,
+  resolver?: JavaConstantResolver,
+  localConstants: Map<string, string> = new Map()
+): string | undefined {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (!looksLikeUnevaluatedJavaConcat(trimmed)) {
+    return trimmed;
+  }
+
+  const direct = evaluateStringInitializer(trimmed, localConstants, resolver);
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  const quoteIdx = trimmed.search(/["']/);
+  if (quoteIdx >= 0) {
+    const fromQuote = evaluateStringInitializer(trimmed.substring(quoteIdx), localConstants, resolver);
+    if (fromQuote !== undefined) {
+      return fromQuote;
+    }
+  }
+
+  const mergedQuotes = mergeQuotedJavaConcat(trimmed);
+  if (mergedQuotes !== trimmed && !looksLikeUnevaluatedJavaConcat(mergedQuotes)) {
+    return mergedQuotes;
+  }
+
+  return undefined;
+}
+
+function deepResolveConstantValue(value: string, resolver?: JavaConstantResolver): string {
+  const resolved = resolveJavaStringExpression(value, resolver);
+  return resolved ?? value;
+}
+
+export { deepResolveConstantValue };
+
+function evaluateStringInitializer(
+  initializer: string,
+  constants: Map<string, string>,
+  externalResolver?: JavaConstantResolver
+): string | undefined {
+  const trimmed = initializer.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.startsWith('"""')) {
+    const end = trimmed.indexOf('"""', 3);
+    if (end >= 0 && !hasStringConcatenation(trimmed.substring(end + 3))) {
+      return normalizeConcatSegment(trimmed.substring(3, end));
+    }
+  }
+
+  const quote = trimmed[0];
+  if (
+    (quote === '"' || quote === "'") &&
+    trimmed.endsWith(quote) &&
+    trimmed.length >= 2 &&
+    !hasStringConcatenation(trimmed)
+  ) {
+    return unescapeJavaString(trimmed.slice(1, -1));
+  }
+
+  const localResolver: JavaConstantResolver = {
+    resolve(ref: string) {
+      const simple = ref.includes('.') ? ref.substring(ref.lastIndexOf('.') + 1) : ref;
+      const fromLocal = constants.get(simple.toLowerCase());
+      if (fromLocal !== undefined) {
+        return fromLocal;
+      }
+      return externalResolver?.resolve(ref);
+    },
+  };
+
+  const segments = collectConcatenatedLiterals(trimmed, localResolver);
+  if (segments.length === 0) {
+    return undefined;
+  }
+  return joinSqlSegments(segments);
+}
+
+const STRING_FIELD_REGEX =
+  /(?:public\s+|protected\s+|private\s+)?(?:static\s+)?(?:final\s+)?String\s+(\w+)\s*=\s*/g;
+
+export function parseStringConstantsFromSource(content: string): Map<string, string> {
+  const constants = new Map<string, string>();
+  let match: RegExpExecArray | null;
+
+  while ((match = STRING_FIELD_REGEX.exec(content)) !== null) {
+    const name = match[1];
+    const initStart = match.index + match[0].length;
+    const initializer = extractInitializerUntilSemicolon(content, initStart);
+    if (!initializer) {
+      continue;
+    }
+
+    const value = evaluateStringInitializer(initializer, constants);
+    if (value !== undefined) {
+      constants.set(name.toLowerCase(), value);
+    }
+  }
+
+  return constants;
+}
+
+export function parseTypeNameFromSource(content: string): string | undefined {
+  const classMatch = content.match(CLASS_DECL_REGEX);
+  if (classMatch) {
+    return classMatch[1];
+  }
+
+  const interfaceMatch = content.match(/(?:public\s+)?interface\s+(\w+)/);
+  if (interfaceMatch) {
+    return interfaceMatch[1];
+  }
+
+  return undefined;
+}
+
+export function parsePackageFromSource(content: string): string | undefined {
+  const packageMatch = content.match(/^\s*package\s+([\w.]+)\s*;/m);
+  return packageMatch?.[1];
+}
+
+export function isJavaConstantReference(expr: string): boolean {
+  return /^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*$/.test(expr.trim());
+}
+
+function collectConcatenatedLiterals(section: string, resolver?: JavaConstantResolver): string[] {
   const segments: string[] = [];
   let i = 0;
 
@@ -608,6 +969,19 @@ function collectConcatenatedLiterals(section: string): string[] {
       continue;
     }
 
+    const exprRead = readJavaConcatExpression(section, i);
+    if (exprRead) {
+      const value = resolver?.resolve(exprRead.expr);
+      if (value !== undefined) {
+        segments.push(deepResolveConstantValue(value, resolver));
+      }
+      i = exprRead.end;
+      if (i >= section.length || isQueryAnnotationAttribute(section, i)) {
+        break;
+      }
+      continue;
+    }
+
     i = skipJavaConcatExpression(section, i);
     if (i >= section.length || isQueryAnnotationAttribute(section, i)) {
       break;
@@ -617,7 +991,7 @@ function collectConcatenatedLiterals(section: string): string[] {
   return segments;
 }
 
-export function extractQuerySql(annotationBody: string): string {
+export function extractQuerySql(annotationBody: string, resolver?: JavaConstantResolver): string {
   const textBlockMatch = annotationBody.match(/"""([\s\S]*?)"""/);
   if (textBlockMatch) {
     return textBlockMatch[1].trim();
@@ -630,7 +1004,7 @@ export function extractQuerySql(annotationBody: string): string {
     sqlSection = annotationBody.substring(sectionStart, findSqlSectionEnd(annotationBody, sectionStart));
   }
 
-  const segments = collectConcatenatedLiterals(sqlSection);
+  const segments = collectConcatenatedLiterals(sqlSection, resolver);
   if (segments.length > 0) {
     return joinSqlSegments(segments);
   }
@@ -641,6 +1015,51 @@ export function extractQuerySql(annotationBody: string): string {
   }
 
   return '';
+}
+
+export interface ParsedImport {
+  fqn: string;
+  simpleName: string;
+  isStatic: boolean;
+  isWildcard: boolean;
+  staticMember?: string;
+}
+
+export function parseImportsDetailed(content: string): ParsedImport[] {
+  const imports: ParsedImport[] = [];
+  const importRegex = /^\s*import\s+(static\s+)?([\w.]+)(\.\*)?\s*;/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const isStatic = Boolean(match[1]);
+    const fqn = match[2];
+    const isWildcard = Boolean(match[3]);
+    const parts = fqn.split('.');
+
+    if (isStatic && !isWildcard && parts.length > 1) {
+      const staticMember = parts.pop()!;
+      const classFqn = parts.join('.');
+      const simpleName = parts[parts.length - 1];
+      imports.push({
+        fqn: classFqn,
+        simpleName,
+        isStatic: true,
+        isWildcard: false,
+        staticMember,
+      });
+      continue;
+    }
+
+    const simpleName = parts[parts.length - 1];
+    imports.push({
+      fqn,
+      simpleName,
+      isStatic,
+      isWildcard,
+    });
+  }
+
+  return imports;
 }
 
 export function parseJpqlAliases(sql: string): Map<string, string> {
@@ -682,23 +1101,12 @@ export function getAnnotationBody(content: string, atIndex: number): string | un
     return undefined;
   }
 
-  let depth = 1;
-  let i = parenStart + 1;
-  while (i < content.length && depth > 0) {
-    const c = content[i];
-    if (c === '(') {
-      depth++;
-    } else if (c === ')') {
-      depth--;
-    }
-    i++;
-  }
-
-  if (atIndex > i) {
+  const closeIndex = findAnnotationCloseParen(content, parenStart);
+  if (atIndex > closeIndex) {
     return undefined;
   }
 
-  return content.substring(parenStart + 1, i - 1);
+  return content.substring(parenStart + 1, closeIndex - 1);
 }
 
 export function findQueryAtPosition(content: string, position: number): ParsedQuery | undefined {
@@ -721,7 +1129,7 @@ export function findQueryAtPosition(content: string, position: number): ParsedQu
   return undefined;
 }
 
-export function parseQueriesFromSource(content: string): ParsedQuery[] {
+export function parseQueriesFromSource(content: string, resolver?: JavaConstantResolver): ParsedQuery[] {
   const results: ParsedQuery[] = [];
   const queryRegex = /@Query\s*\(/g;
   let match: RegExpExecArray | null;
@@ -735,27 +1143,16 @@ export function parseQueriesFromSource(content: string): ParsedQuery[] {
       continue;
     }
 
-    let depth = 1;
-    let i = parenStart + 1;
-    while (i < content.length && depth > 0) {
-      const c = content[i];
-      if (c === '(') {
-        depth++;
-      } else if (c === ')') {
-        depth--;
-      }
-      i++;
-    }
-
-    const annotationBody = content.substring(parenStart + 1, i - 1);
+    const closeIndex = findAnnotationCloseParen(content, parenStart);
+    const annotationBody = content.substring(parenStart + 1, closeIndex - 1);
     const nativeQuery = /nativeQuery\s*=\s*true/.test(annotationBody);
-    const sql = extractQuerySql(annotationBody);
+    const sql = extractQuerySql(annotationBody, resolver);
 
     if (!sql) {
       continue;
     }
 
-    const endLine = content.substring(0, i).split('\n').length - 1;
+    const endLine = content.substring(0, closeIndex).split('\n').length - 1;
     const { namedParams, positionalParams } = extractQueryParams(sql);
 
     results.push({ sql, nativeQuery, startLine, endLine, namedParams, positionalParams });
@@ -816,23 +1213,12 @@ export function isInsideQueryString(content: string, position: number): ParsedQu
       continue;
     }
 
-    let depth = 1;
-    let i = parenStart + 1;
-    while (i < content.length && depth > 0) {
-      const c = content[i];
-      if (c === '(') {
-        depth++;
-      } else if (c === ')') {
-        depth--;
-      }
-      i++;
-    }
-
-    if (position < match.index || position > i) {
+    const closeIndex = findAnnotationCloseParen(content, parenStart);
+    if (position < match.index || position > closeIndex) {
       continue;
     }
 
-    const annotationBody = content.substring(parenStart + 1, i - 1);
+    const annotationBody = content.substring(parenStart + 1, closeIndex - 1);
     const relativePos = position - parenStart - 1;
 
     if (!isInsideQueryValueSection(annotationBody, relativePos)) {
@@ -841,7 +1227,7 @@ export function isInsideQueryString(content: string, position: number): ParsedQu
 
     const nativeQuery = /nativeQuery\s*=\s*true/.test(annotationBody);
     const startLine = content.substring(0, match.index).split('\n').length - 1;
-    const endLine = content.substring(0, i).split('\n').length - 1;
+    const endLine = content.substring(0, closeIndex).split('\n').length - 1;
     const sql = extractQuerySql(annotationBody);
     const { namedParams, positionalParams } = extractQueryParams(sql);
 

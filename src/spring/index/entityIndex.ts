@@ -6,6 +6,9 @@ import {
   parseClassHierarchyFromSource,
   parseEntityFromSource,
   parseRepositoriesFromSource,
+  parseStringConstantsFromSource,
+  parseTypeNameFromSource,
+  parsePackageFromSource,
 } from '../parsing/javaAnnotations';
 import { extractSimpleType } from '../parsing/springDataParser';
 import { CachedConfigBinding } from './configBindingIndex';
@@ -59,6 +62,9 @@ export interface CachedFileEntry {
   classHierarchy?: CachedClassHierarchy;
   repositories?: CachedRepository[];
   configBindings?: CachedConfigBinding[];
+  stringConstantsClassName?: string;
+  stringConstantsFqn?: string;
+  stringConstants?: Record<string, string>;
 }
 
 interface ClassHierarchyEntry {
@@ -77,6 +83,9 @@ export class EntityIndex {
   private repositoriesByName = new Map<string, RepositoryMetadata>();
   private fileEntityMap = new Map<string, EntityMetadata>();
   private fileRepoMap = new Map<string, RepositoryMetadata[]>();
+  private stringConstantsByClass = new Map<string, Map<string, string>>();
+  private stringConstantsByFqn = new Map<string, Map<string, string>>();
+  private fileStringConstantsMeta = new Map<string, { classKey: string; fqn?: string }>();
 
   clear(): void {
     this.entities.clear();
@@ -87,6 +96,9 @@ export class EntityIndex {
     this.repositoriesByName.clear();
     this.fileEntityMap.clear();
     this.fileRepoMap.clear();
+    this.stringConstantsByClass.clear();
+    this.stringConstantsByFqn.clear();
+    this.fileStringConstantsMeta.clear();
   }
 
   indexFile(uri: vscode.Uri, content: string): void {
@@ -127,6 +139,21 @@ export class EntityIndex {
         this.repositoriesByName.set(repo.interfaceName.toLowerCase(), repo);
       }
     }
+
+    const typeName = parseTypeNameFromSource(content);
+    if (typeName) {
+      const constants = parseStringConstantsFromSource(content);
+      if (constants.size > 0) {
+        const typeKey = typeName.toLowerCase();
+        const packageName = parsePackageFromSource(content);
+        const fqn = packageName ? `${packageName}.${typeName}`.toLowerCase() : undefined;
+        this.stringConstantsByClass.set(typeKey, constants);
+        this.fileStringConstantsMeta.set(key, { classKey: typeKey, fqn });
+        if (fqn) {
+          this.stringConstantsByFqn.set(fqn, constants);
+        }
+      }
+    }
   }
 
   hydrateFromCache(files: Record<string, CachedFileEntry>): void {
@@ -161,6 +188,17 @@ export class EntityIndex {
         this.repositoriesByName.set(repo.interfaceName.toLowerCase(), repo);
       }
     }
+
+    if (entry.stringConstants && entry.stringConstantsClassName) {
+      const constants = new Map(Object.entries(entry.stringConstants));
+      const typeKey = entry.stringConstantsClassName.toLowerCase();
+      const fqn = entry.stringConstantsFqn?.toLowerCase();
+      this.stringConstantsByClass.set(typeKey, constants);
+      this.fileStringConstantsMeta.set(uriStr, { classKey: typeKey, fqn });
+      if (fqn) {
+        this.stringConstantsByFqn.set(fqn, constants);
+      }
+    }
   }
 
   serializeToCache(
@@ -172,6 +210,7 @@ export class EntityIndex {
       ...this.fileEntityMap.keys(),
       ...this.fileClassMap.keys(),
       ...this.fileRepoMap.keys(),
+      ...this.fileStringConstantsMeta.keys(),
       ...(configBindingsByFile ? [...configBindingsByFile.keys()] : []),
     ]);
 
@@ -209,7 +248,25 @@ export class EntityIndex {
         entry.configBindings = configBindings;
       }
 
-      if (entry.entity || entry.classHierarchy || entry.repositories || entry.configBindings) {
+      const constMeta = this.fileStringConstantsMeta.get(key);
+      if (constMeta) {
+        const constants = this.stringConstantsByClass.get(constMeta.classKey);
+        if (constants && constants.size > 0) {
+          entry.stringConstantsClassName = constMeta.classKey;
+          entry.stringConstants = Object.fromEntries(constants);
+          if (constMeta.fqn) {
+            entry.stringConstantsFqn = constMeta.fqn;
+          }
+        }
+      }
+
+      if (
+        entry.entity ||
+        entry.classHierarchy ||
+        entry.repositories ||
+        entry.configBindings ||
+        entry.stringConstants
+      ) {
         result[key] = entry;
       }
     }
@@ -222,12 +279,22 @@ export class EntityIndex {
       ...this.fileEntityMap.keys(),
       ...this.fileClassMap.keys(),
       ...this.fileRepoMap.keys(),
+      ...this.fileStringConstantsMeta.keys(),
     ]);
     return [...keys];
   }
 
   removeFile(uri: vscode.Uri): void {
     const key = uri.toString();
+    const constMeta = this.fileStringConstantsMeta.get(key);
+    if (constMeta) {
+      this.stringConstantsByClass.delete(constMeta.classKey);
+      if (constMeta.fqn) {
+        this.stringConstantsByFqn.delete(constMeta.fqn);
+      }
+      this.fileStringConstantsMeta.delete(key);
+    }
+
     const classEntry = this.fileClassMap.get(key);
     if (classEntry) {
       this.classHierarchy.delete(classEntry.className.toLowerCase());
@@ -282,6 +349,14 @@ export class EntityIndex {
 
   getRepositoryByName(name: string): RepositoryMetadata | undefined {
     return this.repositoriesByName.get(name.toLowerCase());
+  }
+
+  getStringConstants(className: string): Map<string, string> | undefined {
+    return this.stringConstantsByClass.get(className.toLowerCase());
+  }
+
+  getStringConstantsByFqn(fqn: string): Map<string, string> | undefined {
+    return this.stringConstantsByFqn.get(fqn.toLowerCase());
   }
 
   getFieldNames(entityName: string): string[] {

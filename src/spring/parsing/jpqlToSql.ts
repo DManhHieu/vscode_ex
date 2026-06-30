@@ -475,12 +475,21 @@ function resolveColumnFromPath(path: string[], aliasCtx: AliasContext, ctx: Tran
     return aliasCtx.aliasToTable.get(aliasName) ?? path[0];
   }
 
-  const declaring = ctx.index.findDeclaringFieldPath(entity, path.slice(1));
-  if (!declaring) {
-    throw new Error(`Unknown field path: ${path.join('.')}`);
+  const fieldPath = path.slice(1);
+  const declaring = ctx.index.findDeclaringFieldPath(entity, fieldPath);
+  if (declaring) {
+    return bareColumns ? declaring.field.columnName : `${path[0]}.${declaring.field.columnName}`;
   }
 
-  return bareColumns ? declaring.field.columnName : `${path[0]}.${declaring.field.columnName}`;
+  if (fieldPath.length === 1) {
+    const fallbackColumn = camelToSnake(fieldPath[0]);
+    ctx.warnings.push(
+      `Assumed column '${fallbackColumn}' for property '${fieldPath[0]}' (field not found in entity index).`
+    );
+    return bareColumns ? fallbackColumn : `${path[0]}.${fallbackColumn}`;
+  }
+
+  throw new Error(`Unknown field path: ${path.join('.')}`);
 }
 
 export { parseJpql };

@@ -3,6 +3,7 @@ import {
   EntityField,
   ParsedEntity,
   ParsedRepository,
+  parseClassHierarchyFromSource,
   parseEntityFromSource,
   parseRepositoriesFromSource,
 } from '../parsing/javaAnnotations';
@@ -45,17 +46,33 @@ export interface CachedRepository {
   startLine: number;
 }
 
+export interface CachedClassHierarchy {
+  className: string;
+  superClassName?: string;
+  fields: EntityField[];
+}
+
 export interface CachedFileEntry {
   mtimeMs: number;
   size: number;
   entity?: CachedEntity;
+  classHierarchy?: CachedClassHierarchy;
   repositories?: CachedRepository[];
   configBindings?: CachedConfigBinding[];
+}
+
+interface ClassHierarchyEntry {
+  className: string;
+  superClassName?: string;
+  fields: EntityField[];
+  fileUri: vscode.Uri;
 }
 
 export class EntityIndex {
   private entities = new Map<string, EntityMetadata>();
   private entitiesByTable = new Map<string, EntityMetadata>();
+  private classHierarchy = new Map<string, ClassHierarchyEntry>();
+  private fileClassMap = new Map<string, ClassHierarchyEntry>();
   private repositories: RepositoryMetadata[] = [];
   private repositoriesByName = new Map<string, RepositoryMetadata>();
   private fileEntityMap = new Map<string, EntityMetadata>();
@@ -64,6 +81,8 @@ export class EntityIndex {
   clear(): void {
     this.entities.clear();
     this.entitiesByTable.clear();
+    this.classHierarchy.clear();
+    this.fileClassMap.clear();
     this.repositories = [];
     this.repositoriesByName.clear();
     this.fileEntityMap.clear();
@@ -73,6 +92,16 @@ export class EntityIndex {
   indexFile(uri: vscode.Uri, content: string): void {
     const key = uri.toString();
     this.removeFile(uri);
+
+    const classMeta = parseClassHierarchyFromSource(content);
+    if (classMeta) {
+      const hierarchyEntry: ClassHierarchyEntry = {
+        ...classMeta,
+        fileUri: uri,
+      };
+      this.classHierarchy.set(classMeta.className.toLowerCase(), hierarchyEntry);
+      this.fileClassMap.set(key, hierarchyEntry);
+    }
 
     const entity = parseEntityFromSource(content, uri.fsPath);
     if (entity) {
@@ -118,6 +147,12 @@ export class EntityIndex {
       this.fileEntityMap.set(uriStr, meta);
     }
 
+    if (entry.classHierarchy) {
+      const hierarchyEntry: ClassHierarchyEntry = { ...entry.classHierarchy, fileUri: uri };
+      this.classHierarchy.set(hierarchyEntry.className.toLowerCase(), hierarchyEntry);
+      this.fileClassMap.set(uriStr, hierarchyEntry);
+    }
+
     if (entry.repositories && entry.repositories.length > 0) {
       const repoMetas = entry.repositories.map((r) => ({ ...r, fileUri: uri }));
       this.fileRepoMap.set(uriStr, repoMetas);
@@ -135,6 +170,7 @@ export class EntityIndex {
     const result: Record<string, CachedFileEntry> = {};
     const allKeys = new Set([
       ...this.fileEntityMap.keys(),
+      ...this.fileClassMap.keys(),
       ...this.fileRepoMap.keys(),
       ...(configBindingsByFile ? [...configBindingsByFile.keys()] : []),
     ]);
@@ -146,6 +182,7 @@ export class EntityIndex {
       }
 
       const entity = this.fileEntityMap.get(key);
+      const classHierarchy = this.fileClassMap.get(key);
       const repos = this.fileRepoMap.get(key);
 
       const entry: CachedFileEntry = {
@@ -158,6 +195,11 @@ export class EntityIndex {
         entry.entity = cachedEntity;
       }
 
+      if (classHierarchy) {
+        const { fileUri: _, ...cachedClassHierarchy } = classHierarchy;
+        entry.classHierarchy = cachedClassHierarchy;
+      }
+
       if (repos && repos.length > 0) {
         entry.repositories = repos.map(({ fileUri: _, ...r }) => r);
       }
@@ -167,7 +209,7 @@ export class EntityIndex {
         entry.configBindings = configBindings;
       }
 
-      if (entry.entity || entry.repositories || entry.configBindings) {
+      if (entry.entity || entry.classHierarchy || entry.repositories || entry.configBindings) {
         result[key] = entry;
       }
     }
@@ -176,12 +218,22 @@ export class EntityIndex {
   }
 
   getIndexedFileUris(): string[] {
-    const keys = new Set([...this.fileEntityMap.keys(), ...this.fileRepoMap.keys()]);
+    const keys = new Set([
+      ...this.fileEntityMap.keys(),
+      ...this.fileClassMap.keys(),
+      ...this.fileRepoMap.keys(),
+    ]);
     return [...keys];
   }
 
   removeFile(uri: vscode.Uri): void {
     const key = uri.toString();
+    const classEntry = this.fileClassMap.get(key);
+    if (classEntry) {
+      this.classHierarchy.delete(classEntry.className.toLowerCase());
+      this.fileClassMap.delete(key);
+    }
+
     const entity = this.fileEntityMap.get(key);
     if (entity) {
       this.entities.delete(entity.className.toLowerCase());
@@ -244,27 +296,70 @@ export class EntityIndex {
     return this.getEntityByName(entity.superClassName);
   }
 
-  getEffectiveFields(entity: EntityMetadata, visited = new Set<string>()): EntityField[] {
-    const key = entity.className.toLowerCase();
+  private getClassEntry(className: string): ClassHierarchyEntry | undefined {
+    return this.classHierarchy.get(className.toLowerCase());
+  }
+
+  private getEffectiveFieldsForClass(className: string, visited = new Set<string>()): EntityField[] {
+    const key = className.toLowerCase();
     if (visited.has(key)) {
       return [];
     }
     visited.add(key);
 
+    const entry = this.getClassEntry(className);
+    if (!entry) {
+      return [];
+    }
+
     const fieldsMap = new Map<string, EntityField>();
 
-    const parent = this.getParentEntity(entity);
-    if (parent) {
-      for (const field of this.getEffectiveFields(parent, visited)) {
+    if (entry.superClassName) {
+      for (const field of this.getEffectiveFieldsForClass(entry.superClassName, visited)) {
         fieldsMap.set(field.name.toLowerCase(), field);
       }
     }
 
-    for (const field of entity.fields) {
+    for (const field of entry.fields) {
       fieldsMap.set(field.name.toLowerCase(), field);
     }
 
     return [...fieldsMap.values()];
+  }
+
+  private findFieldInClass(
+    className: string,
+    fieldName: string,
+    visited = new Set<string>()
+  ): { className: string; field: EntityField } | undefined {
+    const key = className.toLowerCase();
+    if (visited.has(key)) {
+      return undefined;
+    }
+    visited.add(key);
+
+    const entry = this.getClassEntry(className);
+    if (!entry) {
+      return undefined;
+    }
+
+    const lower = fieldName.toLowerCase();
+    const local = entry.fields.find(
+      (f) => f.name.toLowerCase() === lower || f.columnName.toLowerCase() === lower
+    );
+    if (local) {
+      return { className: entry.className, field: local };
+    }
+
+    if (entry.superClassName) {
+      return this.findFieldInClass(entry.superClassName, fieldName, visited);
+    }
+
+    return undefined;
+  }
+
+  getEffectiveFields(entity: EntityMetadata, visited = new Set<string>()): EntityField[] {
+    return this.getEffectiveFieldsForClass(entity.className, visited);
   }
 
   findDeclaringField(
@@ -272,26 +367,15 @@ export class EntityIndex {
     fieldName: string,
     visited = new Set<string>()
   ): { entity: EntityMetadata; field: EntityField } | undefined {
-    const key = entity.className.toLowerCase();
-    if (visited.has(key)) {
+    const found = this.findFieldInClass(entity.className, fieldName, visited);
+    if (!found) {
       return undefined;
     }
-    visited.add(key);
 
-    const lower = fieldName.toLowerCase();
-    const local = entity.fields.find(
-      (f) => f.name.toLowerCase() === lower || f.columnName.toLowerCase() === lower
-    );
-    if (local) {
-      return { entity, field: local };
-    }
-
-    const parent = this.getParentEntity(entity);
-    if (parent) {
-      return this.findDeclaringField(parent, fieldName, visited);
-    }
-
-    return undefined;
+    return {
+      entity: this.getEntityByName(found.className) ?? entity,
+      field: found.field,
+    };
   }
 
   findDeclaringFieldPath(

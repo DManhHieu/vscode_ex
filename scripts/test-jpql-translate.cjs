@@ -43,18 +43,33 @@ function indexEntityFromSource(index, className, source) {
   index.indexFile({ toString: () => entityPath, fsPath: entityPath }, source);
 }
 
+function indexClassFromSource(index, className, source) {
+  const filePath = path.join(__dirname, `../test-samples/mock/${className}.java`);
+  index.indexFile({ toString: () => filePath, fsPath: filePath }, source);
+}
+
 function loadExplicitJoinIndex() {
   const index = new EntityIndex();
+  indexClassFromSource(
+    index,
+    'AbstractAuditingEntity',
+    `
+@MappedSuperclass
+public abstract class AbstractAuditingEntity {
+  @Column(name = "is_delete")
+  private Boolean isDelete;
+}
+`
+  );
   indexEntityFromSource(
     index,
     'TechnicalTestAiScoring',
     `
 @Entity
 @Table(name = "technical_test_ai_scoring")
-public class TechnicalTestAiScoring {
+public class TechnicalTestAiScoring extends AbstractAuditingEntity {
   @Id private Long id;
   private Long technicalTestDetailsId;
-  private Boolean isDelete;
   private String status;
 }
 `
@@ -201,6 +216,7 @@ runCase(
     assert(result.sql.includes('JOIN technical_test_details ttd ON'), 'missing ttd join');
     assert(result.sql.includes('JOIN interview_round ir ON'), 'missing ir join');
     assert(result.sql.includes('tas.technical_test_details_id'), 'missing select column');
+    assert(result.sql.includes('tas.is_delete = FALSE'), 'missing inherited isDelete filter');
     assert(result.sql.includes(':trackerStatuses'), 'missing IN param');
   }
 );

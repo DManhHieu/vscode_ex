@@ -79,34 +79,23 @@ export function extractAnnotationValue(text: string, annotation: string, attr?: 
   return match?.[1];
 }
 
-export function parseEntityFromSource(content: string, filePath: string): ParsedEntity | undefined {
-  const isEntity = /@Entity\b/.test(content);
-  const isMappedSuperclass = /@MappedSuperclass\b/.test(content);
-  const isEmbeddable = /@Embeddable\b/.test(content);
-  if (!isEntity && !isMappedSuperclass && !isEmbeddable) {
-    return undefined;
-  }
+export interface ParsedClassHierarchy {
+  className: string;
+  superClassName?: string;
+  fields: EntityField[];
+}
 
-  const classMatch = content.match(
-    /(?:public\s+|protected\s+|private\s+|abstract\s+|final\s+|sealed\s+|non-sealed\s+)*\bclass\s+(\w+)(?:\s+extends\s+([\w.]+))?/
-  );
-  if (!classMatch) {
-    return undefined;
-  }
+const CLASS_DECL_REGEX =
+  /(?:public\s+|protected\s+|private\s+|abstract\s+|final\s+|sealed\s+|non-sealed\s+)*\bclass\s+(\w+)(?:\s+extends\s+([\w.]+))?/;
 
-  const className = classMatch[1];
-  const superClassRef = classMatch[2];
-  const superClassName = superClassRef ? extractSimpleJavaType(superClassRef) : undefined;
-  const entityName = extractAnnotationValue(content, 'Entity', 'name') ?? className;
-  const tableName = extractAnnotationValue(content, 'Table', 'name') ?? camelToSnake(className);
-  const classStartLine = content.substring(0, classMatch.index ?? 0).split('\n').length - 1;
+const FIELD_DECL_REGEX =
+  /(?:(@[\w.]+(?:\([^)]*\))?\s*)*)(?:private|protected)\s+([\w.<>,\s\[\]]+?)\s+(\w+)\s*(?:=\s*[^;]+)?\s*;/g;
 
+function parseFieldsFromSource(content: string): EntityField[] {
   const fields: EntityField[] = [];
-  const fieldRegex =
-    /(?:(@[\w.]+(?:\([^)]*\))?\s*)*)(?:private|protected)\s+([\w.<>,\s\[\]]+?)\s+(\w+)\s*(?:=\s*[^;]+)?\s*;/g;
   let fieldMatch: RegExpExecArray | null;
 
-  while ((fieldMatch = fieldRegex.exec(content)) !== null) {
+  while ((fieldMatch = FIELD_DECL_REGEX.exec(content)) !== null) {
     const annotations = fieldMatch[1] ?? '';
     const fieldName = fieldMatch[3];
     const fieldType = fieldMatch[2].trim();
@@ -120,6 +109,48 @@ export function parseEntityFromSource(content: string, filePath: string): Parsed
     const association = parseFieldAssociation(annotations, fieldType);
     fields.push({ name: fieldName, columnName, type: fieldType, association });
   }
+
+  return fields;
+}
+
+export function parseClassHierarchyFromSource(content: string): ParsedClassHierarchy | undefined {
+  const classMatch = content.match(CLASS_DECL_REGEX);
+  if (!classMatch) {
+    return undefined;
+  }
+
+  const className = classMatch[1];
+  const superClassRef = classMatch[2];
+  const superClassName = superClassRef ? extractSimpleJavaType(superClassRef) : undefined;
+
+  return {
+    className,
+    superClassName,
+    fields: parseFieldsFromSource(content),
+  };
+}
+
+export function parseEntityFromSource(content: string, filePath: string): ParsedEntity | undefined {
+  const isEntity = /@Entity\b/.test(content);
+  const isMappedSuperclass = /@MappedSuperclass\b/.test(content);
+  const isEmbeddable = /@Embeddable\b/.test(content);
+  if (!isEntity && !isMappedSuperclass && !isEmbeddable) {
+    return undefined;
+  }
+
+  const classMatch = content.match(CLASS_DECL_REGEX);
+  if (!classMatch) {
+    return undefined;
+  }
+
+  const className = classMatch[1];
+  const superClassRef = classMatch[2];
+  const superClassName = superClassRef ? extractSimpleJavaType(superClassRef) : undefined;
+  const entityName = extractAnnotationValue(content, 'Entity', 'name') ?? className;
+  const tableName = extractAnnotationValue(content, 'Table', 'name') ?? camelToSnake(className);
+  const classStartLine = content.substring(0, classMatch.index ?? 0).split('\n').length - 1;
+
+  const fields = parseFieldsFromSource(content);
 
   return { className, entityName, tableName, fields, classStartLine, superClassName };
 }

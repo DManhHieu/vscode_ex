@@ -9,7 +9,7 @@ VS Code extension for batch SQL execution and IntelliJ-style Spring JPA support.
 - Explorer context menu and command palette support
 
 ### Spring JPA (IntelliJ-style)
-- **Run `@Query`** — CodeLens and context menu to run `nativeQuery = true` SQL via SQLTools
+- **Run `@Query`** — CodeLens and context menu to run native SQL or JPQL (translated to SQL) via SQLTools
 - **Copy SQL** — Copy merged query text from `@Query` (handles `"..." + "..."` concatenation) without Java string syntax
 - **Entity navigation** — Ctrl+Click entity names in JPQL (`FROM User u`), table names in native SQL, alias fields (`u.email`), `@Table`, repository generics, import statements, return/param types, repository references, and Spring Data method properties (`findByFirstName` → field)
 - **Datasource linking** — Auto-match `spring.datasource.url` from `application.properties` / `application.yml` to SQLTools connections
@@ -37,7 +37,7 @@ If Java/Gradle extensions fail to load after installing this extension:
 | Command | Description |
 |---------|-------------|
 | `Execute SQL: Execute SQL Files` | Run selected `.sql` files in order |
-| `Execute SQL: Run Spring @Query` | Run native SQL from `@Query` at cursor |
+| `Execute SQL: Run Spring @Query` | Run SQL from `@Query` at cursor (native SQL or JPQL translated to SQL) |
 | `Execute SQL: Copy Spring @Query SQL` | Copy clean merged SQL to clipboard |
 | `Execute SQL: Refresh Spring JPA Index` | Clear cache and rebuild entity/repository index |
 
@@ -50,9 +50,9 @@ If Java/Gradle extensions fail to load after installing this extension:
 | `excuteSql.spring.connectionMappings` | `{}` | Manual JDBC URL → SQLTools connection name map |
 | `excuteSql.spring.cacheIndex` | `true` | Persist index to workspace storage for fast reopen |
 
-## Limitations (v1)
+## Limitations
 
-- JPQL execution requires Hibernate runtime — only native SQL can be executed
+- JPQL → SQL translation is best-effort for dev/debug; `SELECT NEW`, unindexed associations, and some JPQL functions may fail or warn
 - Lombok-generated fields, Kotlin, records, and `@Embeddable` are not indexed
 - Parameter substitution uses simple string replacement (for development use)
 - Index cache is local per machine/workspace storage

@@ -3,6 +3,7 @@ export const JPQL_KEYWORDS = [
   'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
   'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'FETCH', 'SET', 'UPDATE', 'DELETE',
   'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'TRUE', 'FALSE',
+  'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'NEW',
 ];
 
 export const SQL_KEYWORDS = [

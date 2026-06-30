@@ -156,6 +156,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test:jpql": "node scripts/test-jpql-translate.cjs",
+    "test:inheritance": "node scripts/test-inheritance-validation.cjs",
     "package": "vsce package"
   },
   "devDependencies": {

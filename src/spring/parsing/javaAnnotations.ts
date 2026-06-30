@@ -1,7 +1,16 @@
+export interface EntityAssociation {
+  kind: 'ManyToOne' | 'OneToMany' | 'OneToOne' | 'ManyToMany';
+  targetEntity: string;
+  joinColumn?: string;
+  mappedBy?: string;
+  joinTable?: string;
+}
+
 export interface EntityField {
   name: string;
   columnName: string;
   type: string;
+  association?: EntityAssociation;
 }
 
 export interface ParsedEntity {
@@ -34,6 +43,34 @@ export function camelToSnake(name: string): string {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
 }
 
+function extractSimpleJavaType(type: string): string {
+  return type.replace(/\[\]$/, '').trim().split(/[<,>]/)[0]?.trim() ?? type;
+}
+
+function parseFieldAssociation(annotations: string, fieldType: string): EntityAssociation | undefined {
+  const manyToOne = /@ManyToOne\b/.test(annotations);
+  const oneToMany = /@OneToMany\b/.test(annotations);
+  const oneToOne = /@OneToOne\b/.test(annotations);
+  const manyToMany = /@ManyToMany\b/.test(annotations);
+
+  if (!manyToOne && !oneToMany && !oneToOne && !manyToMany) {
+    return undefined;
+  }
+
+  const kind = manyToMany ? 'ManyToMany' : oneToMany ? 'OneToMany' : oneToOne ? 'OneToOne' : 'ManyToOne';
+  const joinColumnMatch = annotations.match(/@JoinColumn\s*\([^)]*name\s*=\s*["']([^"']+)["']/);
+  const mappedByMatch = annotations.match(/mappedBy\s*=\s*["']([^"']+)["']/);
+  const joinTableMatch = annotations.match(/@JoinTable\s*\([^)]*name\s*=\s*["']([^"']+)["']/);
+
+  return {
+    kind,
+    targetEntity: extractSimpleJavaType(fieldType),
+    joinColumn: joinColumnMatch?.[1],
+    mappedBy: mappedByMatch?.[1],
+    joinTable: joinTableMatch?.[1],
+  };
+}
+
 export function extractAnnotationValue(text: string, annotation: string, attr?: string): string | undefined {
   const pattern = attr
     ? new RegExp(`@${annotation}\\s*\\([^)]*${attr}\\s*=\\s*["']([^"']+)["']`, 's')
@@ -50,14 +87,16 @@ export function parseEntityFromSource(content: string, filePath: string): Parsed
     return undefined;
   }
 
-  const classMatch = content.match(/(?:public\s+|abstract\s+)*class\s+(\w+)(?:\s+extends\s+([\w.]+))?/);
+  const classMatch = content.match(
+    /(?:public\s+|protected\s+|private\s+|abstract\s+|final\s+|sealed\s+|non-sealed\s+)*\bclass\s+(\w+)(?:\s+extends\s+([\w.]+))?/
+  );
   if (!classMatch) {
     return undefined;
   }
 
   const className = classMatch[1];
   const superClassRef = classMatch[2];
-  const superClassName = superClassRef ? superClassRef.split('.').pop() : undefined;
+  const superClassName = superClassRef ? extractSimpleJavaType(superClassRef) : undefined;
   const entityName = extractAnnotationValue(content, 'Entity', 'name') ?? className;
   const tableName = extractAnnotationValue(content, 'Table', 'name') ?? camelToSnake(className);
   const classStartLine = content.substring(0, classMatch.index ?? 0).split('\n').length - 1;
@@ -78,7 +117,8 @@ export function parseEntityFromSource(content: string, filePath: string): Parsed
 
     const columnMatch = annotations.match(/@Column\s*\([^)]*name\s*=\s*["']([^"']+)["']/);
     const columnName = columnMatch?.[1] ?? camelToSnake(fieldName);
-    fields.push({ name: fieldName, columnName, type: fieldType });
+    const association = parseFieldAssociation(annotations, fieldType);
+    fields.push({ name: fieldName, columnName, type: fieldType, association });
   }
 
   return { className, entityName, tableName, fields, classStartLine, superClassName };

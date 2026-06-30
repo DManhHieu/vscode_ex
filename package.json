@@ -25,6 +25,32 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "colors": [
+      {
+        "id": "excuteSql.sqlKeyword",
+        "description": "SQL/JPQL keyword inside @Query annotations",
+        "defaults": {
+          "dark": "#C586C0",
+          "light": "#0000FF",
+          "highContrast": "#FFFFFF"
+        }
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "sqlKeyword",
+        "superType": "keyword",
+        "description": "SQL/JPQL keyword inside @Query"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "java",
+        "scopes": {
+          "sqlKeyword": ["keyword.other.sql"]
+        }
+      }
+    ],
     "commands": [
       {
         "command": "excuteSql.runMultiple",

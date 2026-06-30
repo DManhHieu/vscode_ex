@@ -203,6 +203,171 @@ function joinSqlSegments(segments: string[]): string {
   return segments.map((s) => s.trim()).join(' ').trim();
 }
 
+export interface QueryLiteralSegment {
+  text: string;
+  /** Document offset for each character in `text`. */
+  offsets: number[];
+}
+
+function unescapeJavaChar(ch: string): string {
+  switch (ch) {
+    case 'n':
+      return '\n';
+    case 't':
+      return '\t';
+    case 'r':
+      return '\r';
+    case '"':
+      return '"';
+    case "'":
+      return "'";
+    case '\\':
+      return '\\';
+    default:
+      return ch;
+  }
+}
+
+function collectLiteralSegmentsWithOffsets(
+  section: string,
+  sectionBaseOffset: number
+): QueryLiteralSegment[] {
+  const segments: QueryLiteralSegment[] = [];
+  let i = 0;
+
+  while (i < section.length) {
+    while (i < section.length && /[\s+]/.test(section[i])) {
+      i++;
+    }
+    if (i >= section.length) {
+      break;
+    }
+
+    if (section.startsWith('nativeQuery', i)) {
+      break;
+    }
+
+    if (section.startsWith('"""', i)) {
+      const contentStart = i + 3;
+      const end = section.indexOf('"""', contentStart);
+      if (end < 0) {
+        break;
+      }
+      const seg: QueryLiteralSegment = { text: '', offsets: [] };
+      for (let k = contentStart; k < end; k++) {
+        seg.text += section[k];
+        seg.offsets.push(sectionBaseOffset + k);
+      }
+      segments.push(seg);
+      i = end + 3;
+      continue;
+    }
+
+    const quote = section[i];
+    if (quote === '"' || quote === "'") {
+      const seg: QueryLiteralSegment = { text: '', offsets: [] };
+      let j = i + 1;
+      while (j < section.length) {
+        const c = section[j];
+        if (c === '\\' && j + 1 < section.length) {
+          seg.text += unescapeJavaChar(section[j + 1]);
+          seg.offsets.push(sectionBaseOffset + j);
+          j += 2;
+          continue;
+        }
+        if (c === quote) {
+          break;
+        }
+        seg.text += c;
+        seg.offsets.push(sectionBaseOffset + j);
+        j++;
+      }
+      segments.push(seg);
+      i = j + 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return segments;
+}
+
+export function getQueryLiteralSegmentsFromBody(
+  annotationBody: string,
+  bodyDocumentOffset: number
+): QueryLiteralSegment[] {
+  const textBlockStart = annotationBody.indexOf('"""');
+  if (textBlockStart >= 0) {
+    const contentStart = textBlockStart + 3;
+    const contentEnd = annotationBody.indexOf('"""', contentStart);
+    if (contentEnd >= 0) {
+      const seg: QueryLiteralSegment = { text: '', offsets: [] };
+      for (let k = contentStart; k < contentEnd; k++) {
+        seg.text += annotationBody[k];
+        seg.offsets.push(bodyDocumentOffset + k);
+      }
+      return [seg];
+    }
+  }
+
+  let sqlSection = annotationBody;
+  let sqlSectionOffset = bodyDocumentOffset;
+
+  const valueMatch = annotationBody.match(/\bvalue\s*=\s*/);
+  if (valueMatch && valueMatch.index !== undefined) {
+    sqlSection = annotationBody.substring(valueMatch.index + valueMatch[0].length);
+    sqlSectionOffset = bodyDocumentOffset + valueMatch.index + valueMatch[0].length;
+  } else {
+    const trimmed = annotationBody.trim();
+    const trimStart = annotationBody.indexOf(trimmed);
+    if (trimStart >= 0) {
+      sqlSection = trimmed;
+      sqlSectionOffset = bodyDocumentOffset + trimStart;
+    }
+  }
+
+  return collectLiteralSegmentsWithOffsets(sqlSection, sqlSectionOffset);
+}
+
+export function parseQueryLiteralSegments(content: string): Array<{
+  nativeQuery: boolean;
+  segments: QueryLiteralSegment[];
+}> {
+  const results: Array<{ nativeQuery: boolean; segments: QueryLiteralSegment[] }> = [];
+  const queryRegex = /@Query\s*\(/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = queryRegex.exec(content)) !== null) {
+    const parenStart = content.indexOf('(', match.index);
+    if (parenStart < 0) {
+      continue;
+    }
+
+    let depth = 1;
+    let i = parenStart + 1;
+    while (i < content.length && depth > 0) {
+      const c = content[i];
+      if (c === '(') {
+        depth++;
+      } else if (c === ')') {
+        depth--;
+      }
+      i++;
+    }
+
+    const annotationBody = content.substring(parenStart + 1, i - 1);
+    const nativeQuery = /nativeQuery\s*=\s*true/.test(annotationBody);
+    const segments = getQueryLiteralSegmentsFromBody(annotationBody, parenStart + 1);
+
+    if (segments.length > 0) {
+      results.push({ nativeQuery, segments });
+    }
+  }
+
+  return results;
+}
+
 function collectConcatenatedLiterals(section: string): string[] {
   const segments: string[] = [];
   let i = 0;
@@ -467,6 +632,66 @@ export function isInsideQueryString(content: string, position: number): ParsedQu
     const { namedParams, positionalParams } = extractQueryParams(sql);
 
     return { sql, nativeQuery, startLine, endLine, namedParams, positionalParams };
+  }
+
+  return undefined;
+}
+
+export function parseImportsFromSource(content: string): Map<string, string> {
+  const imports = new Map<string, string>();
+  const importRegex = /^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const fqn = match[1];
+    const simpleName = fqn.split('.').pop();
+    if (simpleName) {
+      imports.set(simpleName, fqn);
+    }
+  }
+
+  return imports;
+}
+
+export function getCamelCaseSegmentAt(content: string, offset: number): string | undefined {
+  if (offset < 0 || offset >= content.length) {
+    return undefined;
+  }
+
+  const ch = content[offset];
+  if (!/[A-Za-z_]/.test(ch)) {
+    return undefined;
+  }
+
+  let start = offset;
+  while (start > 0 && /[\w]/.test(content[start - 1])) {
+    start--;
+  }
+
+  let end = offset;
+  while (end < content.length && /[\w]/.test(content[end])) {
+    end++;
+  }
+
+  const identifier = content.substring(start, end);
+  const relativeOffset = offset - start;
+
+  const segments: Array<{ text: string; start: number; end: number }> = [];
+  const segmentRegex = /[A-Z][a-z0-9]*|[a-z0-9]+/g;
+  let segmentMatch: RegExpExecArray | null;
+
+  while ((segmentMatch = segmentRegex.exec(identifier)) !== null) {
+    segments.push({
+      text: segmentMatch[0],
+      start: segmentMatch.index,
+      end: segmentMatch.index + segmentMatch[0].length,
+    });
+  }
+
+  for (const segment of segments) {
+    if (relativeOffset >= segment.start && relativeOffset < segment.end) {
+      return segment.text;
+    }
   }
 
   return undefined;

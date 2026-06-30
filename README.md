@@ -11,7 +11,7 @@ VS Code extension for batch SQL execution and IntelliJ-style Spring JPA support.
 ### Spring JPA (IntelliJ-style)
 - **Run `@Query`** — CodeLens and context menu to run `nativeQuery = true` SQL via SQLTools
 - **Copy SQL** — Copy merged query text from `@Query` (handles `"..." + "..."` concatenation) without Java string syntax
-- **Entity navigation** — Ctrl+Click entity names in JPQL (`FROM User u`), table names in native SQL, alias fields (`u.email`), `@Table`, and repository generics
+- **Entity navigation** — Ctrl+Click entity names in JPQL (`FROM User u`), table names in native SQL, alias fields (`u.email`), `@Table`, repository generics, import statements, return/param types, repository references, and Spring Data method properties (`findByFirstName` → field)
 - **Datasource linking** — Auto-match `spring.datasource.url` from `application.properties` / `application.yml` to SQLTools connections
 - **Index cache** — Entity scan results saved to workspace storage; reloads on reopen with delta scan for changed files only
 - **Completion** — Entity, field, table, and column suggestions inside `@Query` string literals
@@ -20,7 +20,7 @@ VS Code extension for batch SQL execution and IntelliJ-style Spring JPA support.
 ## Requirements
 
 - [SQLTools](https://marketplace.visualstudio.com/items?itemName=mtxr.sqltools) (recommended — required for running SQL)
-- [Language Support for Java](https://marketplace.visualstudio.com/items?itemName=redhat.java) (recommended)
+- [Language Support for Java](https://marketplace.visualstudio.com/items?itemName=redhat.java) (optional — general Java editing; entity/repository navigation uses the built-in cached index)
 - [Spring Boot Tools](https://marketplace.visualstudio.com/items?itemName=vmware.vscode-spring-boot) (recommended for syntax highlighting)
 
 ## Troubleshooting

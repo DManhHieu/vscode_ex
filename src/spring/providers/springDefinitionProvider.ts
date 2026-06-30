@@ -2,27 +2,7 @@ import * as vscode from 'vscode';
 import { getEntityIndex, EntityMetadata } from '../index/entityIndex';
 import { isInsideQueryString, parseJpqlAliases } from '../parsing/javaAnnotations';
 import { findFieldLineInEntity } from '../navigation/entityNavigation';
-
-async function tryJavaDefinition(
-  document: vscode.TextDocument,
-  position: vscode.Position
-): Promise<vscode.Location | undefined> {
-  const javaExt = vscode.extensions.getExtension('redhat.java');
-  if (!javaExt?.isActive) {
-    return undefined;
-  }
-
-  try {
-    const locations = await vscode.commands.executeCommand<vscode.Location[]>(
-      'vscode.executeDefinitionProvider',
-      document.uri,
-      position
-    );
-    return locations?.[0];
-  } catch {
-    return undefined;
-  }
-}
+import { resolveSpringJavaDefinition } from '../navigation/javaSymbolResolver';
 
 function getWordAtPosition(document: vscode.TextDocument, position: vscode.Position): string | undefined {
   const range = document.getWordRangeAtPosition(position, /[A-Za-z_][\w]*/);
@@ -169,6 +149,6 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
       }
     }
 
-    return tryJavaDefinition(document, position);
+    return resolveSpringJavaDefinition(document, position);
   }
 }

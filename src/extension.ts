@@ -12,6 +12,27 @@ const JAVA_SELECTOR: vscode.DocumentSelector = { language: 'java', scheme: 'file
 /** Defer heavy Spring indexing until Java/Gradle extensions have finished starting. */
 const SPRING_INIT_DELAY_MS = 10000;
 
+async function registerQuerySyntaxHighlighting(context: vscode.ExtensionContext): Promise<void> {
+  const [
+    { registerQueryHighlighting },
+    { QuerySemanticTokensProvider, QUERY_TOKEN_LEGEND },
+  ] = await Promise.all([
+    import('./spring/providers/queryHighlightDecorationProvider'),
+    import('./spring/providers/querySemanticTokensProvider'),
+  ]);
+
+  registerQueryHighlighting(context);
+
+  const semanticTokensProvider = new QuerySemanticTokensProvider();
+  context.subscriptions.push(
+    vscode.languages.registerDocumentSemanticTokensProvider(
+      JAVA_SELECTOR,
+      semanticTokensProvider,
+      QUERY_TOKEN_LEGEND
+    )
+  );
+}
+
 let springFeaturesStarted = false;
 let springInitTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -236,6 +257,7 @@ export function activate(context: vscode.ExtensionContext): void {
   initRunner(outputChannel, () => isActive);
 
   registerCoreCommands(context, () => isActive);
+  void registerQuerySyntaxHighlighting(context);
   scheduleSpringFeatures(context);
 
   context.subscriptions.push({

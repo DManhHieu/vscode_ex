@@ -52,6 +52,7 @@ export class EntityIndex {
   private entities = new Map<string, EntityMetadata>();
   private entitiesByTable = new Map<string, EntityMetadata>();
   private repositories: RepositoryMetadata[] = [];
+  private repositoriesByName = new Map<string, RepositoryMetadata>();
   private fileEntityMap = new Map<string, EntityMetadata>();
   private fileRepoMap = new Map<string, RepositoryMetadata[]>();
 
@@ -59,6 +60,7 @@ export class EntityIndex {
     this.entities.clear();
     this.entitiesByTable.clear();
     this.repositories = [];
+    this.repositoriesByName.clear();
     this.fileEntityMap.clear();
     this.fileRepoMap.clear();
   }
@@ -87,6 +89,9 @@ export class EntityIndex {
       }));
       this.fileRepoMap.set(key, repoMetas);
       this.repositories.push(...repoMetas);
+      for (const repo of repoMetas) {
+        this.repositoriesByName.set(repo.interfaceName.toLowerCase(), repo);
+      }
     }
   }
 
@@ -112,6 +117,9 @@ export class EntityIndex {
       const repoMetas = entry.repositories.map((r) => ({ ...r, fileUri: uri }));
       this.fileRepoMap.set(uriStr, repoMetas);
       this.repositories.push(...repoMetas);
+      for (const repo of repoMetas) {
+        this.repositoriesByName.set(repo.interfaceName.toLowerCase(), repo);
+      }
     }
   }
 
@@ -167,6 +175,9 @@ export class EntityIndex {
 
     const repos = this.fileRepoMap.get(key);
     if (repos) {
+      for (const repo of repos) {
+        this.repositoriesByName.delete(repo.interfaceName.toLowerCase());
+      }
       this.repositories = this.repositories.filter((r) => r.fileUri.toString() !== key);
       this.fileRepoMap.delete(key);
     }
@@ -198,6 +209,10 @@ export class EntityIndex {
 
   getRepositoriesInFile(uri: vscode.Uri): RepositoryMetadata[] {
     return this.fileRepoMap.get(uri.toString()) ?? [];
+  }
+
+  getRepositoryByName(name: string): RepositoryMetadata | undefined {
+    return this.repositoriesByName.get(name.toLowerCase());
   }
 
   getFieldNames(entityName: string): string[] {

@@ -1,19 +1,7 @@
 import * as vscode from 'vscode';
 import { getEntityIndex } from '../index/entityIndex';
 import { isInsideQueryString } from '../parsing/javaAnnotations';
-
-const JPQL_KEYWORDS = [
-  'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
-  'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
-  'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'FETCH', 'SET',
-];
-
-const SQL_KEYWORDS = [
-  'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
-  'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
-  'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'INSERT', 'UPDATE', 'DELETE', 'INTO',
-  'VALUES', 'SET', 'LIMIT', 'OFFSET', 'UNION', 'ALL',
-];
+import { JPQL_KEYWORDS, SQL_KEYWORDS } from '../parsing/queryKeywords';
 
 function getWordPrefix(document: vscode.TextDocument, position: vscode.Position): string {
   const line = document.lineAt(position.line).text;

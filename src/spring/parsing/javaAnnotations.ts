@@ -228,6 +228,99 @@ function unescapeJavaChar(ch: string): string {
   }
 }
 
+const QUERY_SQL_ATTRIBUTES = ['value', 'countQuery'] as const;
+
+const QUERY_ANNOTATION_ATTRIBUTES = [
+  'countQuery',
+  'nativeQuery',
+  'flushAutomatically',
+  'readOnly',
+  'timeout',
+  'value',
+] as const;
+
+function isQueryAnnotationAttribute(section: string, index: number): boolean {
+  for (const attr of QUERY_ANNOTATION_ATTRIBUTES) {
+    if (!section.startsWith(attr, index)) {
+      continue;
+    }
+    const next = section[index + attr.length];
+    if (next === undefined || /[\s=,)]/.test(next)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function skipBalanced(section: string, start: number, open: string, close: string): number {
+  let depth = 0;
+  let pos = start;
+  while (pos < section.length) {
+    const ch = section[pos];
+    if (ch === open) {
+      depth++;
+    } else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        return pos + 1;
+      }
+    }
+    pos++;
+  }
+  return pos;
+}
+
+/** Skip a Java expression between string concatenation operators. */
+function skipJavaConcatExpression(section: string, index: number): number {
+  let pos = index;
+
+  while (pos < section.length) {
+    while (pos < section.length && /\s/.test(section[pos])) {
+      pos++;
+    }
+    if (pos >= section.length) {
+      break;
+    }
+    if (section[pos] === '+') {
+      return pos;
+    }
+    if (section.startsWith('"""', pos) || section[pos] === '"' || section[pos] === "'") {
+      return pos;
+    }
+    if (isQueryAnnotationAttribute(section, pos)) {
+      return pos;
+    }
+
+    const ch = section[pos];
+    if (/[A-Za-z_]/.test(ch)) {
+      while (pos < section.length && /[\w.]/.test(section[pos])) {
+        pos++;
+      }
+      continue;
+    }
+    if (ch === '(') {
+      pos = skipBalanced(section, pos, '(', ')');
+      continue;
+    }
+    if (ch === ')') {
+      return pos;
+    }
+
+    pos++;
+  }
+
+  return pos;
+}
+
+function findSqlSectionEnd(annotationBody: string, sectionStart: number): number {
+  const rest = annotationBody.substring(sectionStart);
+  const match = rest.match(/\b(?:countQuery|nativeQuery|flushAutomatically|readOnly|timeout)\s*=/);
+  if (match && match.index !== undefined && match.index > 0) {
+    return sectionStart + match.index;
+  }
+  return annotationBody.length;
+}
+
 function collectLiteralSegmentsWithOffsets(
   section: string,
   sectionBaseOffset: number
@@ -243,7 +336,7 @@ function collectLiteralSegmentsWithOffsets(
       break;
     }
 
-    if (section.startsWith('nativeQuery', i)) {
+    if (isQueryAnnotationAttribute(section, i)) {
       break;
     }
 
@@ -287,7 +380,10 @@ function collectLiteralSegmentsWithOffsets(
       continue;
     }
 
-    break;
+    i = skipJavaConcatExpression(section, i);
+    if (i >= section.length || isQueryAnnotationAttribute(section, i)) {
+      break;
+    }
   }
 
   return segments;
@@ -313,6 +409,25 @@ export function getQueryLiteralSegmentsFromBody(
 
   let sqlSection = annotationBody;
   let sqlSectionOffset = bodyDocumentOffset;
+  const segments: QueryLiteralSegment[] = [];
+
+  for (const attr of QUERY_SQL_ATTRIBUTES) {
+    const attrMatch = annotationBody.match(new RegExp(`\\b${attr}\\s*=\\s*`));
+    if (!attrMatch || attrMatch.index === undefined) {
+      continue;
+    }
+
+    const sectionStart = attrMatch.index + attrMatch[0].length;
+    const sectionEnd = findSqlSectionEnd(annotationBody, sectionStart);
+    const section = annotationBody.substring(sectionStart, sectionEnd);
+    segments.push(
+      ...collectLiteralSegmentsWithOffsets(section, bodyDocumentOffset + sectionStart)
+    );
+  }
+
+  if (segments.length > 0) {
+    return segments;
+  }
 
   const valueMatch = annotationBody.match(/\bvalue\s*=\s*/);
   if (valueMatch && valueMatch.index !== undefined) {
@@ -380,7 +495,7 @@ function collectConcatenatedLiterals(section: string): string[] {
       break;
     }
 
-    if (section.startsWith('nativeQuery', i)) {
+    if (isQueryAnnotationAttribute(section, i)) {
       break;
     }
 
@@ -415,7 +530,10 @@ function collectConcatenatedLiterals(section: string): string[] {
       continue;
     }
 
-    break;
+    i = skipJavaConcatExpression(section, i);
+    if (i >= section.length || isQueryAnnotationAttribute(section, i)) {
+      break;
+    }
   }
 
   return segments;
@@ -430,7 +548,8 @@ export function extractQuerySql(annotationBody: string): string {
   let sqlSection = annotationBody.trim();
   const valueMatch = annotationBody.match(/\bvalue\s*=\s*/);
   if (valueMatch && valueMatch.index !== undefined) {
-    sqlSection = annotationBody.substring(valueMatch.index + valueMatch[0].length);
+    const sectionStart = valueMatch.index + valueMatch[0].length;
+    sqlSection = annotationBody.substring(sectionStart, findSqlSectionEnd(annotationBody, sectionStart));
   }
 
   const segments = collectConcatenatedLiterals(sqlSection);
@@ -580,16 +699,33 @@ function isInsideQueryValueSection(annotationBody: string, relativePos: number):
     }
   }
 
-  const valueMatch = annotationBody.match(/\bvalue\s*=\s*/);
-  const sectionStart = valueMatch ? (valueMatch.index ?? 0) + valueMatch[0].length : 0;
-  const nativeIdx = annotationBody.search(/\bnativeQuery\s*=/);
-  const sectionEnd = nativeIdx >= 0 ? nativeIdx : annotationBody.length;
-
-  if (relativePos < sectionStart || relativePos > sectionEnd) {
-    return extractStringLiteralAt(annotationBody, relativePos) !== undefined;
+  if (!extractStringLiteralAt(annotationBody, relativePos)) {
+    return false;
   }
 
-  return true;
+  for (const attr of QUERY_SQL_ATTRIBUTES) {
+    const attrMatch = annotationBody.match(new RegExp(`\\b${attr}\\s*=\\s*`));
+    if (!attrMatch || attrMatch.index === undefined) {
+      continue;
+    }
+    const sectionStart = attrMatch.index + attrMatch[0].length;
+    const sectionEnd = findSqlSectionEnd(annotationBody, sectionStart);
+    if (relativePos >= sectionStart && relativePos < sectionEnd) {
+      return true;
+    }
+  }
+
+  if (!annotationBody.match(/\bvalue\s*=/)) {
+    const trimmed = annotationBody.trim();
+    const trimStart = annotationBody.indexOf(trimmed);
+    if (trimStart >= 0 && relativePos >= trimStart) {
+      const nativeIdx = annotationBody.search(/\bnativeQuery\s*=/);
+      const sectionEnd = nativeIdx >= 0 ? nativeIdx : annotationBody.length;
+      return relativePos < sectionEnd;
+    }
+  }
+
+  return false;
 }
 
 export function isInsideQueryString(content: string, position: number): ParsedQuery | undefined {

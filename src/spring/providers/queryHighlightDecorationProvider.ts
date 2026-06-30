@@ -1,16 +1,20 @@
 import * as vscode from 'vscode';
-import { collectQueryKeywordRanges } from './queryKeywordRanges';
+import { collectQuerySyntaxRanges } from './queryKeywordRanges';
 
 const JAVA_SELECTOR = 'java';
 const REFRESH_DEBOUNCE_MS = 100;
 
 export class QueryHighlightDecorationProvider {
-  private readonly decorationType: vscode.TextEditorDecorationType;
+  private readonly keywordDecoration: vscode.TextEditorDecorationType;
+  private readonly functionDecoration: vscode.TextEditorDecorationType;
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor() {
-    this.decorationType = vscode.window.createTextEditorDecorationType({
+    this.keywordDecoration = vscode.window.createTextEditorDecorationType({
       color: new vscode.ThemeColor('excuteSql.sqlKeyword'),
+    });
+    this.functionDecoration = vscode.window.createTextEditorDecorationType({
+      color: new vscode.ThemeColor('excuteSql.sqlFunction'),
     });
   }
 
@@ -19,17 +23,20 @@ export class QueryHighlightDecorationProvider {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
-    this.decorationType.dispose();
+    this.keywordDecoration.dispose();
+    this.functionDecoration.dispose();
   }
 
   refresh(editor: vscode.TextEditor): void {
     if (editor.document.languageId !== JAVA_SELECTOR) {
-      editor.setDecorations(this.decorationType, []);
+      editor.setDecorations(this.keywordDecoration, []);
+      editor.setDecorations(this.functionDecoration, []);
       return;
     }
 
-    const ranges = collectQueryKeywordRanges(editor.document);
-    editor.setDecorations(this.decorationType, ranges);
+    const { keywords, functions } = collectQuerySyntaxRanges(editor.document);
+    editor.setDecorations(this.keywordDecoration, keywords);
+    editor.setDecorations(this.functionDecoration, functions);
   }
 
   refreshAllVisible(): void {

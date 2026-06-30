@@ -34,6 +34,15 @@
           "light": "#0000FF",
           "highContrast": "#FFFFFF"
         }
+      },
+      {
+        "id": "excuteSql.sqlFunction",
+        "description": "SQL/JPQL function inside @Query annotations",
+        "defaults": {
+          "dark": "#DCDCAA",
+          "light": "#795E26",
+          "highContrast": "#FFFF00"
+        }
       }
     ],
     "semanticTokenTypes": [
@@ -41,13 +50,19 @@
         "id": "sqlKeyword",
         "superType": "keyword",
         "description": "SQL/JPQL keyword inside @Query"
+      },
+      {
+        "id": "sqlFunction",
+        "superType": "function",
+        "description": "SQL/JPQL function inside @Query"
       }
     ],
     "semanticTokenScopes": [
       {
         "language": "java",
         "scopes": {
-          "sqlKeyword": ["keyword.other.sql"]
+          "sqlKeyword": ["keyword.other.sql"],
+          "sqlFunction": ["entity.name.function", "support.function"]
         }
       }
     ],

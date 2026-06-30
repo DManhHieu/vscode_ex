@@ -2,6 +2,7 @@ export const JPQL_KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
   'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
   'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'FETCH', 'SET',
+  'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
 ];
 
 export const SQL_KEYWORDS = [
@@ -9,7 +10,25 @@ export const SQL_KEYWORDS = [
   'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
   'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'INSERT', 'UPDATE', 'DELETE', 'INTO',
   'VALUES', 'SET', 'LIMIT', 'OFFSET', 'UNION', 'ALL',
+  'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'TRUE', 'FALSE',
+];
+
+export const JPQL_FUNCTIONS = [
+  'LENGTH', 'LOCATE', 'CONCAT', 'SUBSTRING', 'TRIM', 'LOWER', 'UPPER', 'ABS', 'SQRT',
+  'MOD', 'SIZE', 'INDEX', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
+  'COALESCE', 'NULLIF', 'CAST',
+];
+
+export const SQL_FUNCTIONS = [
+  'SUM', 'COUNT', 'AVG', 'MIN', 'MAX', 'IF', 'CONCAT', 'LEFT', 'RIGHT', 'ROUND',
+  'LOWER', 'UPPER', 'YEAR', 'MONTH', 'DAY', 'WEEK', 'QUARTER', 'HOUR', 'MINUTE',
+  'SECOND', 'DATE', 'TIME', 'NOW', 'CURDATE', 'CURTIME', 'LAST_DAY', 'COALESCE',
+  'NULLIF', 'CAST', 'CONVERT', 'SUBSTRING', 'TRIM', 'LENGTH', 'ABS', 'CEIL', 'FLOOR',
+  'MOD', 'POW', 'SQRT', 'IFNULL', 'GROUP_CONCAT', 'REPLACE', 'REVERSE', 'LOCATE',
+  'INSTR', 'DATEDIFF', 'DATE_ADD', 'DATE_SUB', 'FORMAT', 'UUID', 'MD5', 'SHA',
 ];
 
 export const JPQL_KEYWORD_SET = new Set(JPQL_KEYWORDS);
 export const SQL_KEYWORD_SET = new Set(SQL_KEYWORDS);
+export const JPQL_FUNCTION_SET = new Set(JPQL_FUNCTIONS);
+export const SQL_FUNCTION_SET = new Set(SQL_FUNCTIONS);

@@ -43,6 +43,15 @@
           "light": "#795E26",
           "highContrast": "#FFFF00"
         }
+      },
+      {
+        "id": "excuteSql.sqlCte",
+        "description": "SQL CTE (WITH clause) name inside @Query annotations",
+        "defaults": {
+          "dark": "#4EC9B0",
+          "light": "#267F99",
+          "highContrast": "#4EC9B0"
+        }
       }
     ],
     "semanticTokenTypes": [
@@ -55,6 +64,11 @@
         "id": "sqlFunction",
         "superType": "function",
         "description": "SQL/JPQL function inside @Query"
+      },
+      {
+        "id": "sqlCte",
+        "superType": "type",
+        "description": "SQL CTE name inside @Query"
       }
     ],
     "semanticTokenScopes": [
@@ -62,7 +76,8 @@
         "language": "java",
         "scopes": {
           "sqlKeyword": ["keyword.other.sql"],
-          "sqlFunction": ["entity.name.function", "support.function"]
+          "sqlFunction": ["entity.name.function", "support.function"],
+          "sqlCte": ["entity.name.type", "support.type"]
         }
       }
     ],

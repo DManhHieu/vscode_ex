@@ -9,7 +9,7 @@ export const SQL_KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER',
   'ON', 'ORDER', 'BY', 'GROUP', 'HAVING', 'DISTINCT', 'AS', 'IN', 'NOT', 'NULL',
   'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'INSERT', 'UPDATE', 'DELETE', 'INTO',
-  'VALUES', 'SET', 'LIMIT', 'OFFSET', 'UNION', 'ALL',
+  'VALUES', 'SET', 'LIMIT', 'OFFSET', 'UNION', 'ALL', 'WITH', 'RECURSIVE',
   'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'TRUE', 'FALSE',
 ];
 

@@ -10,7 +10,7 @@ VS Code extension for batch SQL execution and IntelliJ-style Spring JPA support.
 
 ### Spring JPA (IntelliJ-style)
 - **Run `@Query`** — CodeLens and context menu to run native SQL or JPQL (translated to SQL) via SQLTools
-- **Copy SQL** — Copy merged query text from `@Query` (handles `"..." + "..."` concatenation) without Java string syntax
+- **Copy SQL** — Copy merged query text from `@Query` (handles `"..." + "..."` concatenation and inlines same-file or imported Java `String` constants) without Java string syntax
 - **Entity navigation** — Ctrl+Click entity names in JPQL (`FROM User u`), table names in native SQL, alias fields (`u.email`), `@Table`, repository generics, import statements, return/param types, repository references, and Spring Data method properties (`findByFirstName` → field)
 - **Datasource linking** — Auto-match `spring.datasource.url` from `application.properties` / `application.yml` to SQLTools connections
 - **Index cache** — Entity scan results saved to workspace storage; reloads on reopen with delta scan for changed files only
@@ -47,8 +47,25 @@ If Java/Gradle extensions fail to load after installing this extension:
 |---------|---------|-------------|
 | `excuteSql.spring.autoPickDatasource` | `true` | Match Spring datasource to SQLTools connection |
 | `excuteSql.spring.javaGlob` | `**/src/main/java/**/*.java` | Glob for entity indexing |
+| `excuteSql.spring.configGlob` | `**/src/main/resources/application*.{properties,yml,yaml}` | Glob patterns for Spring config files (navigation + datasource) |
 | `excuteSql.spring.connectionMappings` | `{}` | Manual JDBC URL → SQLTools connection name map |
 | `excuteSql.spring.cacheIndex` | `true` | Persist index to workspace storage for fast reopen |
+
+### Custom config file location
+
+By default, config navigation and datasource matching scan `application*.properties` / `application*.yml` under `src/main/resources`. To use a custom folder such as `resources/config/`, set `excuteSql.spring.configGlob` in workspace or user settings:
+
+```json
+{
+  "excuteSql.spring.configGlob": [
+    "**/resources/config/**/*.yml",
+    "**/resources/config/**/*.yaml",
+    "**/resources/config/**/*.properties"
+  ]
+}
+```
+
+Patterns are workspace-relative globs (same syntax as `excuteSql.spring.javaGlob`). Keep the default patterns in the array if you still use standard Spring Boot `application.yml` files.
 
 ## Limitations
 

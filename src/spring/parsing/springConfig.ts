@@ -84,9 +84,12 @@ export function parsePropertiesContent(content: string): Record<string, string> 
 }
 
 const DEFAULT_SPRING_CONFIG_GLOBS = [
-  '**/src/main/resources/application*.properties',
-  '**/src/main/resources/application*.yml',
-  '**/src/main/resources/application*.yaml',
+  "**/src/main/resources/application*.properties",
+  "**/src/main/resources/application*.yml",
+  "**/src/main/resources/application*.yaml",
+  "**/src/main/resources/config/application*.yml",
+  "**/src/main/resources/config/application*.yaml",
+  "**/src/main/resources/config/application*.properties"
 ];
 const SPRING_CONFIG_EXCLUDE = '{**/node_modules/**,**/target/**,**/build/**,**/.git/**}';
 

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isPropertiesConfigDocument, isYamlConfigDocument } from '../springConfigLanguages';
 
 function getPropertyKeyFromPropertiesLine(line: string, character: number): string | undefined {
   const trimmed = line.trim();
@@ -11,13 +12,22 @@ function getPropertyKeyFromPropertiesLine(line: string, character: number): stri
     return undefined;
   }
 
-  const keyStart = line.indexOf(trimmed);
-  const keyEnd = keyStart + eqIndex;
-  if (character < keyStart || character > keyEnd) {
+  const key = trimmed.substring(0, eqIndex).trim();
+  if (!key) {
     return undefined;
   }
 
-  return trimmed.substring(0, eqIndex).trim() || undefined;
+  const keyStart = line.indexOf(trimmed);
+  const eqPos = keyStart + eqIndex;
+  if (character >= keyStart && character < eqPos) {
+    return key;
+  }
+
+  if (character > eqPos) {
+    return key;
+  }
+
+  return undefined;
 }
 
 function buildYamlKeyPath(stack: string[], key: string): string {
@@ -56,11 +66,23 @@ function getPropertyKeyFromYamlDocument(
     }
 
     if (lineNum === position.line) {
+      const fullKey = buildYamlKeyPath(stack.map((entry) => entry.key), key);
+      const commentStart = rawLine.indexOf('#');
+      if (commentStart >= 0 && position.character >= commentStart) {
+        return undefined;
+      }
+
       const keyStart = rawLine.indexOf(key, indent);
       const keyEnd = keyStart + key.length;
       if (position.character >= keyStart && position.character <= keyEnd) {
-        return buildYamlKeyPath(stack.map((entry) => entry.key), key);
+        return fullKey;
       }
+
+      const colonPos = rawLine.indexOf(':', indent);
+      if (value && colonPos >= 0 && position.character > colonPos) {
+        return fullKey;
+      }
+
       return undefined;
     }
 
@@ -84,16 +106,11 @@ export function getPropertyKeyAtPosition(
   document: vscode.TextDocument,
   position: vscode.Position
 ): string | undefined {
-  const languageId = document.languageId;
-  if (languageId === 'properties' || document.fileName.endsWith('.properties')) {
+  if (isPropertiesConfigDocument(document)) {
     return getPropertyKeyFromPropertiesLine(document.lineAt(position.line).text, position.character);
   }
 
-  if (
-    languageId === 'yaml' ||
-    document.fileName.endsWith('.yml') ||
-    document.fileName.endsWith('.yaml')
-  ) {
+  if (isYamlConfigDocument(document)) {
     return getPropertyKeyFromYamlDocument(document, position);
   }
 

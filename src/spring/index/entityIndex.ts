@@ -201,6 +201,63 @@ export class EntityIndex {
     }
   }
 
+  serializeFileToCache(
+    uriStr: string,
+    fingerprint: { mtimeMs: number; size: number },
+    configBindings?: CachedConfigBinding[]
+  ): CachedFileEntry | undefined {
+    const entity = this.fileEntityMap.get(uriStr);
+    const classHierarchy = this.fileClassMap.get(uriStr);
+    const repos = this.fileRepoMap.get(uriStr);
+
+    const entry: CachedFileEntry = {
+      mtimeMs: fingerprint.mtimeMs,
+      size: fingerprint.size,
+    };
+
+    if (entity) {
+      const { fileUri: _, ...cachedEntity } = entity;
+      entry.entity = cachedEntity;
+    }
+
+    if (classHierarchy) {
+      const { fileUri: _, ...cachedClassHierarchy } = classHierarchy;
+      entry.classHierarchy = cachedClassHierarchy;
+    }
+
+    if (repos && repos.length > 0) {
+      entry.repositories = repos.map(({ fileUri: _, ...r }) => r);
+    }
+
+    if (configBindings?.length) {
+      entry.configBindings = configBindings;
+    }
+
+    const constMeta = this.fileStringConstantsMeta.get(uriStr);
+    if (constMeta) {
+      const constants = this.stringConstantsByClass.get(constMeta.classKey);
+      if (constants && constants.size > 0) {
+        entry.stringConstantsClassName = constMeta.classKey;
+        entry.stringConstants = Object.fromEntries(constants);
+        if (constMeta.fqn) {
+          entry.stringConstantsFqn = constMeta.fqn;
+        }
+      }
+    }
+
+    if (
+      entry.entity ||
+      entry.classHierarchy ||
+      entry.repositories ||
+      entry.configBindings ||
+      entry.stringConstants
+    ) {
+      return entry;
+    }
+
+    return undefined;
+  }
+
   serializeToCache(
     fingerprints: Map<string, { mtimeMs: number; size: number }>,
     configBindingsByFile?: Map<string, CachedConfigBinding[] | undefined>
@@ -220,53 +277,8 @@ export class EntityIndex {
         continue;
       }
 
-      const entity = this.fileEntityMap.get(key);
-      const classHierarchy = this.fileClassMap.get(key);
-      const repos = this.fileRepoMap.get(key);
-
-      const entry: CachedFileEntry = {
-        mtimeMs: fp.mtimeMs,
-        size: fp.size,
-      };
-
-      if (entity) {
-        const { fileUri: _, ...cachedEntity } = entity;
-        entry.entity = cachedEntity;
-      }
-
-      if (classHierarchy) {
-        const { fileUri: _, ...cachedClassHierarchy } = classHierarchy;
-        entry.classHierarchy = cachedClassHierarchy;
-      }
-
-      if (repos && repos.length > 0) {
-        entry.repositories = repos.map(({ fileUri: _, ...r }) => r);
-      }
-
-      const configBindings = configBindingsByFile?.get(key);
-      if (configBindings?.length) {
-        entry.configBindings = configBindings;
-      }
-
-      const constMeta = this.fileStringConstantsMeta.get(key);
-      if (constMeta) {
-        const constants = this.stringConstantsByClass.get(constMeta.classKey);
-        if (constants && constants.size > 0) {
-          entry.stringConstantsClassName = constMeta.classKey;
-          entry.stringConstants = Object.fromEntries(constants);
-          if (constMeta.fqn) {
-            entry.stringConstantsFqn = constMeta.fqn;
-          }
-        }
-      }
-
-      if (
-        entry.entity ||
-        entry.classHierarchy ||
-        entry.repositories ||
-        entry.configBindings ||
-        entry.stringConstants
-      ) {
+      const entry = this.serializeFileToCache(key, fp, configBindingsByFile?.get(key));
+      if (entry) {
         result[key] = entry;
       }
     }

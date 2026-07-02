@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { resolveConnectionId, pickSqlToolsConnection } from './connection';
 import {
+  CONFIG_PROPERTIES_SELECTOR,
+  CONFIG_YAML_SELECTOR,
+  isSpringConfigDocument,
+} from './spring/springConfigLanguages';
+import {
   disposeRunner,
   initRunner,
   pickSqlFilesFromDialog,
@@ -9,8 +14,6 @@ import {
 } from './runner';
 
 const JAVA_SELECTOR: vscode.DocumentSelector = { language: 'java', scheme: 'file' };
-const PROPERTIES_SELECTOR: vscode.DocumentSelector = { language: 'properties', scheme: 'file' };
-const YAML_SELECTOR: vscode.DocumentSelector = { language: 'yaml', scheme: 'file' };
 /** Defer heavy Spring indexing until Java/Gradle extensions have finished starting. */
 const SPRING_INIT_DELAY_MS = 10000;
 
@@ -190,8 +193,8 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
 
     const configPropertiesDefinitionProvider = new ConfigPropertiesDefinitionProvider();
     context.subscriptions.push(
-      vscode.languages.registerDefinitionProvider(PROPERTIES_SELECTOR, configPropertiesDefinitionProvider),
-      vscode.languages.registerDefinitionProvider(YAML_SELECTOR, configPropertiesDefinitionProvider)
+      vscode.languages.registerDefinitionProvider(CONFIG_PROPERTIES_SELECTOR, configPropertiesDefinitionProvider),
+      vscode.languages.registerDefinitionProvider(CONFIG_YAML_SELECTOR, configPropertiesDefinitionProvider)
     );
 
     const validateDiagnostics = (doc: vscode.TextDocument): void => {
@@ -221,9 +224,7 @@ async function startSpringFeatures(context: vscode.ExtensionContext): Promise<vo
 }
 
 function hasOpenSpringDocuments(): boolean {
-  return vscode.workspace.textDocuments.some(
-    (doc) => doc.languageId === 'java' || doc.languageId === 'properties' || doc.languageId === 'yaml'
-  );
+  return vscode.workspace.textDocuments.some(isSpringConfigDocument);
 }
 
 function scheduleSpringFeaturesDeferred(context: vscode.ExtensionContext): void {
@@ -253,7 +254,7 @@ function scheduleSpringFeatures(context: vscode.ExtensionContext): void {
   }
 
   const onSpringDocOpened = vscode.workspace.onDidOpenTextDocument((doc) => {
-    if (doc.languageId === 'java' || doc.languageId === 'properties' || doc.languageId === 'yaml') {
+    if (isSpringConfigDocument(doc)) {
       onSpringDocOpened.dispose();
       scheduleSpringFeaturesDeferred(context);
     }

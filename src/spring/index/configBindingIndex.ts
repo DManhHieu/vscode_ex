@@ -124,7 +124,7 @@ export class ConfigBindingIndex {
     const seen = new Set<string>();
     for (const binding of this.allBindings) {
       if (keysMatch(propertyKey, binding.propertyKey)) {
-        const id = `${binding.fileUri}|${binding.line}|${binding.column}`;
+        const id = `${binding.fileUri}|${binding.line}|${binding.column}|${binding.propertyKey}`;
         if (!seen.has(id)) {
           seen.add(id);
           matches.push(binding);

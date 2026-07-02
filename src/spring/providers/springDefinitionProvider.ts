@@ -1,6 +1,11 @@
 import * as vscode from 'vscode';
 import { getEntityIndex, EntityMetadata } from '../index/entityIndex';
 import { isInsideQueryString, parseJpqlAliases } from '../parsing/javaAnnotations';
+import {
+  findConfigPropertyLocations,
+  getConfigurationPropertyKeyAtPosition,
+  getPropertyPlaceholderAtPosition,
+} from '../navigation/configPropertyNavigation';
 import { findFieldLineInEntity } from '../navigation/entityNavigation';
 import { resolveSpringJavaDefinition } from '../navigation/javaSymbolResolver';
 
@@ -82,6 +87,24 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
     const content = document.getText();
     const offset = document.offsetAt(position);
     const index = getEntityIndex();
+
+    const placeholderKey = getPropertyPlaceholderAtPosition(document, position);
+    if (placeholderKey) {
+      const configLocations = await findConfigPropertyLocations(placeholderKey, document.uri);
+      if (configLocations.length > 0) {
+        return configLocations;
+      }
+      return undefined;
+    }
+
+    const configurationPropertyKey = getConfigurationPropertyKeyAtPosition(document, position);
+    if (configurationPropertyKey) {
+      const configLocations = await findConfigPropertyLocations(configurationPropertyKey, document.uri);
+      if (configLocations.length > 0) {
+        return configLocations;
+      }
+      return undefined;
+    }
 
     const lineText = document.lineAt(position.line).text;
 

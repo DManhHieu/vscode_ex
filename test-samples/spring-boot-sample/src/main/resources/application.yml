@@ -1,7 +1,15 @@
 app:
+  cron: "0 0 12 * * *"
   mail:
     host: localhost
     port: 587
     smtp:
       host: smtp.example.com
       auth: true
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/demo
+    username: demo
+    password: demo
+    driver-class-name: org.postgresql.Driver

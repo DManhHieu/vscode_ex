@@ -20,6 +20,8 @@
     "onLanguage:java",
     "onLanguage:properties",
     "onLanguage:yaml",
+    "onLanguage:spring-boot-properties",
+    "onLanguage:spring-boot-properties-yaml",
     "onCommand:excuteSql.runMultiple",
     "onCommand:excuteSql.runSpringQuery",
     "onCommand:excuteSql.copySpringQuery",
@@ -138,6 +140,18 @@
           "type": "string",
           "default": "**/src/main/java/**/*.java",
           "description": "Glob pattern for Java source files to index for JPA entities"
+        },
+        "excuteSql.spring.configGlob": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/src/main/resources/application*.properties",
+            "**/src/main/resources/application*.yml",
+            "**/src/main/resources/application*.yaml"
+          ],
+          "description": "Glob patterns for Spring config files (properties/yml/yaml) used for property navigation and datasource matching. Example for a custom folder: [\"**/resources/config/**/*.yml\", \"**/resources/config/**/*.properties\"]"
         },
         "excuteSql.spring.connectionMappings": {
           "type": "object",

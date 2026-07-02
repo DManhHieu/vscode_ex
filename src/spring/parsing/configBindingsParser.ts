@@ -33,6 +33,13 @@ interface ClassBodyInfo {
   prefix?: string;
 }
 
+interface ParsedAnnotation {
+  name: string;
+  body: string;
+  start: number;
+  end: number;
+}
+
 function lineColumnAt(content: string, index: number): { line: number; column: number } {
   const before = content.substring(0, index);
   const line = before.split('\n').length - 1;
@@ -49,9 +56,56 @@ function extractConfigurationPropertiesPrefix(text: string): string | undefined 
   return prefixMatch?.[1];
 }
 
-function extractValuePropertyKey(valueExpr: string): string | undefined {
-  const match = valueExpr.match(/\$\{([^}:]+)(?::[^}]*)?\}/);
-  return match ? toCanonicalKey(match[1]) : undefined;
+/** Extract Spring property keys from ${key} and ${key:default} placeholders. */
+export function extractPropertyKeysFromText(text: string): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const regex = /\$\{([^}:]+)(?::[^}]*)?\}/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const key = toCanonicalKey(match[1]);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+
+  return keys;
+}
+
+function findMatchingParenEnd(content: string, openIndex: number): number {
+  let depth = 1;
+  let i = openIndex + 1;
+  let inString: '"' | "'" | undefined;
+
+  while (i < content.length && depth > 0) {
+    const ch = content[i];
+    const prev = content[i - 1];
+
+    if (inString) {
+      if (ch === inString && prev !== '\\') {
+        inString = undefined;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      inString = ch;
+      i++;
+      continue;
+    }
+
+    if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+    }
+    i++;
+  }
+
+  return depth === 0 ? i - 1 : -1;
 }
 
 function findMatchingBraceEnd(content: string, openBraceIndex: number): number {
@@ -66,6 +120,104 @@ function findMatchingBraceEnd(content: string, openBraceIndex: number): number {
     i++;
   }
   return i - 1;
+}
+
+function findAnnotations(content: string): ParsedAnnotation[] {
+  const annotations: ParsedAnnotation[] = [];
+  const regex = /@([\w.]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const name = match[1];
+    const start = match.index ?? 0;
+    let cursor = start + match[0].length;
+
+    while (cursor < content.length && /\s/.test(content[cursor])) {
+      cursor++;
+    }
+
+    if (content[cursor] !== '(') {
+      annotations.push({ name, body: '', start, end: cursor });
+      continue;
+    }
+
+    const closeIndex = findMatchingParenEnd(content, cursor);
+    if (closeIndex < 0) {
+      continue;
+    }
+
+    annotations.push({
+      name,
+      body: content.substring(cursor + 1, closeIndex),
+      start,
+      end: closeIndex + 1,
+    });
+    regex.lastIndex = closeIndex + 1;
+  }
+
+  return annotations;
+}
+
+function resolveClassNameBefore(content: string, index: number): string {
+  const before = content.substring(0, index);
+  const classMatches = before.match(/class\s+(\w+)/g);
+  return classMatches ? classMatches[classMatches.length - 1].replace('class ', '') : '';
+}
+
+function skipLeadingAnnotations(text: string): string {
+  let rest = text;
+
+  while (true) {
+    const match = rest.match(/^\s*@([\w.]+)/);
+    if (!match) {
+      break;
+    }
+
+    let cursor = match[0].length;
+    while (cursor < rest.length && /\s/.test(rest[cursor])) {
+      cursor++;
+    }
+
+    if (rest[cursor] === '(') {
+      const closeIndex = findMatchingParenEnd(rest, cursor);
+      if (closeIndex < 0) {
+        break;
+      }
+      cursor = closeIndex + 1;
+    }
+
+    rest = rest.substring(cursor);
+  }
+
+  return rest;
+}
+
+function resolveMemberNameAfter(content: string, annotationEnd: number): string | undefined {
+  const rest = skipLeadingAnnotations(content.substring(annotationEnd));
+
+  const paramMatch = rest.match(/^([\w.<>,\s\[\]?]+)\s+(\w+)\s*[,)]/);
+  if (paramMatch) {
+    return paramMatch[2];
+  }
+
+  const fieldMatch = rest.match(/^(?:(?:private|protected|public)\s+)?(?:[\w.<>,\s\[\]?]+\s+)+(\w+)\s*[;=]/);
+  if (fieldMatch) {
+    return fieldMatch[1];
+  }
+
+  const methodMatch = rest.match(
+    /^(?:(?:public|protected|private)\s+)?(?:(?:static|final|synchronized|default|abstract)\s+)*(?:[\w.<>,\s\[\]?]+\s+)+(\w+)\s*\(/
+  );
+  if (methodMatch) {
+    return methodMatch[1];
+  }
+
+  const classMatch = rest.match(/^class\s+(\w+)/);
+  if (classMatch) {
+    return classMatch[1];
+  }
+
+  return undefined;
 }
 
 function parseClassFields(body: string, bodyStartOffset: number, content: string): ParsedClassField[] {
@@ -184,59 +336,41 @@ function collectConfigurationPropertyBindings(
   return bindings;
 }
 
-function parseValueBindings(content: string): ParsedConfigBinding[] {
+/** Index ${...} placeholders in any Spring annotation (@Value, @Scheduled, @KafkaListener, etc.). */
+function parsePlaceholderBindings(content: string): ParsedConfigBinding[] {
   const bindings: ParsedConfigBinding[] = [];
 
-  const fieldRegex =
-    /@Value\s*\(\s*["']([^"']+)["']\s*\)\s*(?:(?:private|protected|public)\s+)?(?:[\w.<>,\s\[\]?]+\s+)?(\w+)\s*[;=]/g;
-  let match: RegExpExecArray | null;
-  while ((match = fieldRegex.exec(content)) !== null) {
-    const propertyKey = extractValuePropertyKey(match[1]);
-    if (!propertyKey) {
+  for (const annotation of findAnnotations(content)) {
+    if (annotation.name === 'ConfigurationProperties' || annotation.name.endsWith('.ConfigurationProperties')) {
       continue;
     }
-    const pos = lineColumnAt(content, match.index ?? 0);
-    const classMatch = content.substring(0, match.index).match(/class\s+(\w+)/g);
-    const className = classMatch ? classMatch[classMatch.length - 1].replace('class ', '') : '';
-    bindings.push({
-      propertyKey,
-      kind: 'value',
-      className,
-      memberName: match[2],
-      line: pos.line,
-      column: pos.column,
-    });
-  }
 
-  const ctorParamRegex =
-    /@Value\s*\(\s*["']([^"']+)["']\s*\)\s*([\w.<>,\s\[\]?]+)\s+(\w+)/g;
-  while ((match = ctorParamRegex.exec(content)) !== null) {
-    const before = content.substring(0, match.index ?? 0);
-    if (!/\([^)]*$/.test(before.split('\n').pop() ?? before)) {
+    const propertyKeys = extractPropertyKeysFromText(annotation.body);
+    if (propertyKeys.length === 0) {
       continue;
     }
-    const propertyKey = extractValuePropertyKey(match[1]);
-    if (!propertyKey) {
-      continue;
+
+    const className = resolveClassNameBefore(content, annotation.start);
+    const memberName = resolveMemberNameAfter(content, annotation.end) ?? className;
+    const pos = lineColumnAt(content, annotation.start);
+
+    for (const propertyKey of propertyKeys) {
+      bindings.push({
+        propertyKey,
+        kind: 'value',
+        className,
+        memberName,
+        line: pos.line,
+        column: pos.column,
+      });
     }
-    const pos = lineColumnAt(content, match.index ?? 0);
-    const classMatch = before.match(/class\s+(\w+)/g);
-    const className = classMatch ? classMatch[classMatch.length - 1].replace('class ', '') : '';
-    bindings.push({
-      propertyKey,
-      kind: 'value',
-      className,
-      memberName: match[3],
-      line: pos.line,
-      column: pos.column,
-    });
   }
 
   return bindings;
 }
 
 export function parseConfigBindingsFromSource(content: string): ParsedConfigBinding[] {
-  if (!/@ConfigurationProperties\b/.test(content) && !/@Value\b/.test(content)) {
+  if (!/\$\{/.test(content) && !/@ConfigurationProperties\b/.test(content)) {
     return [];
   }
 
@@ -260,11 +394,11 @@ export function parseConfigBindingsFromSource(content: string): ParsedConfigBind
     );
   }
 
-  bindings.push(...parseValueBindings(content));
+  bindings.push(...parsePlaceholderBindings(content));
 
   const seen = new Set<string>();
   return bindings.filter((b) => {
-    const key = `${b.propertyKey}|${b.kind}|${b.className}|${b.memberName}|${b.line}`;
+    const key = `${b.propertyKey}|${b.kind}|${b.className}|${b.memberName}|${b.line}|${b.column}`;
     if (seen.has(key)) {
       return false;
     }

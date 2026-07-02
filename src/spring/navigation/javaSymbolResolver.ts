@@ -7,6 +7,7 @@ import {
 } from '../parsing/javaAnnotations';
 import { parseSpringDataMethodName } from '../parsing/springDataParser';
 import { findFieldLineInEntity } from './entityNavigation';
+import { isInPropertyPlaceholderContext } from './configPropertyNavigation';
 
 function decapitalize(s: string): string {
   if (!s) {
@@ -161,6 +162,10 @@ export async function resolveSpringJavaDefinition(
 ): Promise<vscode.Location | undefined> {
   const content = document.getText();
   const offset = document.offsetAt(position);
+
+  if (isInPropertyPlaceholderContext(document, position)) {
+    return undefined;
+  }
 
   if (isInsideQueryString(content, offset)) {
     return undefined;

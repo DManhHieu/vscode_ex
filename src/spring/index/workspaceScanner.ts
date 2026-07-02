@@ -1,14 +1,15 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { getConfigBindingIndex } from './configBindingIndex';
 import { getEntityIndex } from './entityIndex';
 import {
   clearCacheFile,
+  deleteFileCache,
   getFileStat,
-  hydrateIndexFromCache,
+  hydrateFileCacheEntry,
   initIndexCache,
   isFileUnchanged,
-  loadCache,
+  loadIndexFromCache,
+  removeOrphanCacheEntries,
   scheduleSaveCache,
   saveCacheNow,
   updateFileFingerprint,
@@ -65,7 +66,7 @@ export async function indexJavaFile(uri: vscode.Uri, saveToCache = true): Promis
     getEntityIndex().removeFile(uri);
     getConfigBindingIndex().removeFile(uri);
     if (saveToCache) {
-      scheduleSaveCache(javaGlob);
+      void deleteFileCache(uri);
     }
     return;
   }
@@ -78,7 +79,7 @@ export async function indexJavaFile(uri: vscode.Uri, saveToCache = true): Promis
   }
 
   if (saveToCache) {
-    scheduleSaveCache(javaGlob);
+    scheduleSaveCache(javaGlob, uri);
   }
 }
 
@@ -198,57 +199,57 @@ export async function rebuildIndex(
   await runIndexOperation('Spring JPA Index', options, execute);
 }
 
-async function deltaScan(report?: ProgressReporter): Promise<boolean> {
+async function loadIndexFromWorkspaceCache(report?: ProgressReporter): Promise<void> {
   const index = getEntityIndex();
-  const bindingIndex = getConfigBindingIndex();
-  report?.('Checking for changed Java files...');
+  index.clear();
+  getConfigBindingIndex().clear();
+
+  report?.('Loading cached index...');
   const files = await findJavaFiles();
   const currentPaths = new Set(files.map((f) => f.toString()));
   let changed = false;
 
-  const indexedUris = new Set([...index.getIndexedFileUris(), ...bindingIndex.getIndexedFileUris()]);
-  for (const indexedUri of indexedUris) {
-    if (!currentPaths.has(indexedUri)) {
-      index.removeFile(vscode.Uri.parse(indexedUri));
-      bindingIndex.removeFile(vscode.Uri.parse(indexedUri));
-      changed = true;
-    }
-  }
-
-  const staleFiles: vscode.Uri[] = [];
   for (let i = 0; i < files.length; i += STAT_BATCH_SIZE) {
     const batch = files.slice(i, i + STAT_BATCH_SIZE);
+    const processed = Math.min(i + batch.length, files.length);
+    report?.(
+      `Loading ${processed}/${files.length} Java files`,
+      files.length > 0 ? (batch.length / files.length) * 100 : undefined
+    );
+
     const results = await Promise.all(
       batch.map(async (uri) => {
         const stat = await getFileStat(uri);
-        if (!stat || isFileUnchanged(uri, stat.mtimeMs, stat.size)) {
-          return undefined;
+        if (!stat) {
+          await indexJavaFile(uri, false);
+          return true;
         }
-        return uri;
+        if (isFileUnchanged(uri, stat.mtimeMs, stat.size)) {
+          const hydrated = await hydrateFileCacheEntry(uri.toString());
+          if (!hydrated) {
+            await indexJavaFile(uri, false);
+            return true;
+          }
+          return false;
+        }
+        await indexJavaFile(uri, false);
+        return true;
       })
     );
-    staleFiles.push(...results.filter((uri): uri is vscode.Uri => uri !== undefined));
+    if (results.some((reindexed) => reindexed)) {
+      changed = true;
+    }
     await yieldToEventLoop();
   }
 
-  if (staleFiles.length > 0) {
-    for (let i = 0; i < staleFiles.length; i++) {
-      const uri = staleFiles[i];
-      report?.(
-        `Updating ${i + 1}/${staleFiles.length}: ${path.basename(uri.fsPath)}`,
-        staleFiles.length > 0 ? (1 / staleFiles.length) * 100 : undefined
-      );
-      await indexJavaFile(uri, false);
-      changed = true;
-    }
+  if (await removeOrphanCacheEntries(currentPaths)) {
+    changed = true;
   }
 
   if (changed) {
     report?.('Saving index cache...');
     await saveCacheNow(javaGlob);
   }
-
-  return changed;
 }
 
 async function initializeIndex(): Promise<void> {
@@ -261,12 +262,10 @@ async function initializeIndex(): Promise<void> {
 
   try {
     await runIndexOperation('Spring JPA Index', { showProgress: false }, async (report) => {
-      const cache = await loadCache(javaGlob);
+      const cacheAvailable = await loadIndexFromCache(javaGlob);
 
-      if (cache) {
-        report('Loading cached index...');
-        await hydrateIndexFromCache(cache);
-        await deltaScan(report);
+      if (cacheAvailable) {
+        await loadIndexFromWorkspaceCache(report);
         notifyIndexUpdated();
       } else {
         report('Building index from workspace...');
@@ -304,7 +303,7 @@ function handleFileDelete(uri: vscode.Uri): void {
 
   getEntityIndex().removeFile(uri);
   getConfigBindingIndex().removeFile(uri);
-  scheduleSaveCache(javaGlob);
+  void deleteFileCache(uri);
   notifyIndexUpdated();
 }
 

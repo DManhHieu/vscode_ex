@@ -82,7 +82,7 @@ function findPlaceholderKeyAtOffset(content: string, offset: number): string | u
 function findAnnotationBodyAtOffset(
   content: string,
   offset: number
-): { body: string; start: number; end: number } | undefined {
+): { body: string; start: number; end: number; bodyStart: number } | undefined {
   const regex = /@([\w.]+)/g;
   let match: RegExpExecArray | null;
 
@@ -96,7 +96,7 @@ function findAnnotationBodyAtOffset(
 
     if (content[cursor] !== '(') {
       if (offset >= start && offset <= cursor) {
-        return { body: '', start, end: cursor };
+        return { body: '', start, end: cursor, bodyStart: cursor };
       }
       continue;
     }
@@ -112,6 +112,7 @@ function findAnnotationBodyAtOffset(
         body: content.substring(cursor + 1, closeIndex),
         start,
         end,
+        bodyStart: cursor + 1,
       };
     }
   }
@@ -184,11 +185,57 @@ export function getPropertyPlaceholderAtPosition(
   return keys.length === 1 ? keys[0] : undefined;
 }
 
+export function getConfigurationPropertiesPrefixAtPosition(
+  document: vscode.TextDocument,
+  position: vscode.Position
+): string | undefined {
+  const content = document.getText();
+  const offset = document.offsetAt(position);
+
+  const annotation = findAnnotationBodyAtOffset(content, offset);
+  if (!annotation) {
+    return undefined;
+  }
+
+  const annotationName = content.substring(annotation.start, annotation.end).match(/^@([\w.]+)/)?.[1];
+  if (
+    annotationName !== 'ConfigurationProperties' &&
+    !(annotationName ?? '').endsWith('.ConfigurationProperties')
+  ) {
+    return undefined;
+  }
+
+  const stringRegex = /["']([^"']+)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = stringRegex.exec(annotation.body)) !== null) {
+    const value = match[1];
+    const before = annotation.body.substring(0, match.index);
+    const assignmentMatch = before.match(/(\w+)\s*=\s*$/);
+    const attributeName = assignmentMatch?.[1];
+
+    if (attributeName && attributeName !== 'prefix' && attributeName !== 'value') {
+      continue;
+    }
+
+    const valueStartInContent = annotation.bodyStart + match.index + 1;
+    const valueEndInContent = valueStartInContent + value.length;
+
+    if (offset >= valueStartInContent && offset <= valueEndInContent) {
+      return toCanonicalKey(value);
+    }
+  }
+
+  return undefined;
+}
+
 export function isInPropertyPlaceholderContext(
   document: vscode.TextDocument,
   position: vscode.Position
 ): boolean {
-  return getPropertyPlaceholderAtPosition(document, position) !== undefined;
+  return (
+    getPropertyPlaceholderAtPosition(document, position) !== undefined ||
+    getConfigurationPropertiesPrefixAtPosition(document, position) !== undefined
+  );
 }
 
 /** Return the bound property key when the cursor is on a @ConfigurationProperties field. */
@@ -251,39 +298,39 @@ async function collectConfigFileUris(nearJavaUri?: vscode.Uri): Promise<vscode.U
   return uris;
 }
 
+async function readConfigContent(uri: vscode.Uri): Promise<string | undefined> {
+  try {
+    const data = await vscode.workspace.fs.readFile(uri);
+    return Buffer.from(data).toString('utf8');
+  } catch {
+    try {
+      return fs.readFileSync(uri.fsPath, 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export async function findConfigPropertyLocations(
   propertyKey: string,
-  nearJavaUri?: vscode.Uri
+  nearJavaUri?: vscode.Uri,
+  allowPrefix = false
 ): Promise<vscode.Location[]> {
   const uris = await collectConfigFileUris(nearJavaUri);
   const locations: vscode.Location[] = [];
 
   for (const uri of uris) {
-    try {
-      const data = await vscode.workspace.fs.readFile(uri);
-      const content = Buffer.from(data).toString('utf8');
-      const ext = uri.fsPath.toLowerCase();
-      const loc = ext.endsWith('.properties')
-        ? findPropertyLocationInProperties(content, propertyKey)
-        : findPropertyLocationInYaml(content, propertyKey);
+    const content = await readConfigContent(uri);
+    if (content === undefined) {
+      continue;
+    }
 
-      if (loc) {
-        locations.push(new vscode.Location(uri, new vscode.Position(loc.line, loc.column)));
-      }
-    } catch {
-      try {
-        const content = fs.readFileSync(uri.fsPath, 'utf8');
-        const ext = uri.fsPath.toLowerCase();
-        const loc = ext.endsWith('.properties')
-          ? findPropertyLocationInProperties(content, propertyKey)
-          : findPropertyLocationInYaml(content, propertyKey);
+    const loc = uri.fsPath.toLowerCase().endsWith('.properties')
+      ? findPropertyLocationInProperties(content, propertyKey, allowPrefix)
+      : findPropertyLocationInYaml(content, propertyKey, allowPrefix);
 
-        if (loc) {
-          locations.push(new vscode.Location(uri, new vscode.Position(loc.line, loc.column)));
-        }
-      } catch {
-        // unreadable config file
-      }
+    if (loc) {
+      locations.push(new vscode.Location(uri, new vscode.Position(loc.line, loc.column)));
     }
   }
 

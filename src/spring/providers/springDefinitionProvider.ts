@@ -3,6 +3,7 @@ import { getEntityIndex, EntityMetadata } from '../index/entityIndex';
 import { isInsideQueryString, parseJpqlAliases } from '../parsing/javaAnnotations';
 import {
   findConfigPropertyLocations,
+  getConfigurationPropertiesPrefixAtPosition,
   getConfigurationPropertyKeyAtPosition,
   getPropertyPlaceholderAtPosition,
 } from '../navigation/configPropertyNavigation';
@@ -91,6 +92,15 @@ export class SpringDefinitionProvider implements vscode.DefinitionProvider {
     const placeholderKey = getPropertyPlaceholderAtPosition(document, position);
     if (placeholderKey) {
       const configLocations = await findConfigPropertyLocations(placeholderKey, document.uri);
+      if (configLocations.length > 0) {
+        return configLocations;
+      }
+      return undefined;
+    }
+
+    const configurationPropertiesPrefix = getConfigurationPropertiesPrefixAtPosition(document, position);
+    if (configurationPropertiesPrefix) {
+      const configLocations = await findConfigPropertyLocations(configurationPropertiesPrefix, document.uri, true);
       if (configLocations.length > 0) {
         return configLocations;
       }

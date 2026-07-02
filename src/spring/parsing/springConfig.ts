@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { keysMatch } from './relaxedBinding';
+import { keysMatch, toCanonicalKey } from './relaxedBinding';
 import { findPropertyLocationInYaml, PropertyKeyLocation } from './yamlPropertyPaths';
 
 export { findPropertyLocationInYaml };
@@ -162,9 +162,18 @@ export async function findModuleConfigFileUris(moduleRoot: string): Promise<vsco
   return uris;
 }
 
-/** Find the line/column of a property key in .properties content using relaxed binding. */
-export function findPropertyLocationInProperties(content: string, propertyKey: string): PropertyKeyLocation | undefined {
+/**
+ * Find the line/column of a property key in .properties content using relaxed binding.
+ * When allowPrefix is true, also matches the first key that starts with propertyKey
+ */
+export function findPropertyLocationInProperties(
+  content: string,
+  propertyKey: string,
+  allowPrefix = false
+): PropertyKeyLocation | undefined {
   const lines = content.split('\n');
+  const canonicalTarget = toCanonicalKey(propertyKey);
+  let prefixFallback: PropertyKeyLocation | undefined;
 
   for (let lineNum = 0; lineNum < lines.length; lineNum++) {
     const rawLine = lines[lineNum];
@@ -179,14 +188,19 @@ export function findPropertyLocationInProperties(content: string, propertyKey: s
     }
 
     const key = trimmed.substring(0, eqIndex).trim();
+    const lineStart = rawLine.indexOf(trimmed);
+    const keyStart = lineStart >= 0 ? lineStart : rawLine.search(/\S/);
+
     if (keysMatch(key, propertyKey)) {
-      const lineStart = rawLine.indexOf(trimmed);
-      const keyStart = lineStart >= 0 ? lineStart : rawLine.search(/\S/);
       return { line: lineNum, column: keyStart };
+    }
+
+    if (allowPrefix && !prefixFallback && toCanonicalKey(key).startsWith(`${canonicalTarget}.`)) {
+      prefixFallback = { line: lineNum, column: keyStart };
     }
   }
 
-  return undefined;
+  return prefixFallback;
 }
 
 function extractDatasource(props: Record<string, string>): SpringDatasource | undefined {
